@@ -106,7 +106,7 @@ We may update this Privacy Policy from time to time. We will notify you of any c
 
 If you have questions about this Privacy Policy or our data practices, please contact us:
 
-- **Email**: [Your Email Address]
+- **Email**: jhurelsulit@gmail.com
 - **Website**: https://innovative-enjoyment-production.up.railway.app
 
 ## Compliance
