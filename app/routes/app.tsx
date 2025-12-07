@@ -10,9 +10,9 @@ import { authenticate } from "../shopify.server";
 export const links = () => [{ rel: "stylesheet", href: polarisStyles }];
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  // await authenticate.admin(request);
+  await authenticate.admin(request);
 
-  return { apiKey: process.env.SHOPIFY_API_KEY || "" };
+  return { apiKey: "199ce6b5950f7634e8b48d6e304c9d1d" };
 };
 
 export default function App() {
