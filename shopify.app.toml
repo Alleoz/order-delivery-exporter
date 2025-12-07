@@ -2,7 +2,7 @@
 
 client_id = "199ce6b5950f7634e8b48d6e304c9d1d"
 name = "OrderStatus"
-application_url = "https://example.com"
+application_url = "https://innovative-enjoyment-production.up.railway.app"
 embedded = true
 
 [build]
@@ -24,4 +24,8 @@ api_version = "2025-01"
 scopes = "read_customers,read_fulfillments,read_orders,read_shipping"
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [
+  "https://innovative-enjoyment-production.up.railway.app/auth/callback",
+  "https://innovative-enjoyment-production.up.railway.app/auth/shopify/callback",
+  "https://innovative-enjoyment-production.up.railway.app/api/auth/callback"
+]
