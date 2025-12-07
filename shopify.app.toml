@@ -6,7 +6,7 @@ application_url = "https://innovative-enjoyment-production.up.railway.app"
 embedded = true
 
 [build]
-automatically_update_urls_on_dev = true
+automatically_update_urls_on_dev = false
 
 [webhooks]
 api_version = "2025-01"
@@ -25,7 +25,5 @@ scopes = "read_customers,read_fulfillments,read_orders,read_shipping"
 
 [auth]
 redirect_urls = [
-  "https://innovative-enjoyment-production.up.railway.app/auth/callback",
-  "https://innovative-enjoyment-production.up.railway.app/auth/shopify/callback",
-  "https://innovative-enjoyment-production.up.railway.app/api/auth/callback"
+  "https://innovative-enjoyment-production.up.railway.app/auth/callback"
 ]
