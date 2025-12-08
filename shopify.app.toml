@@ -1,6 +1,6 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "199ce6b5950f7634e8b48d6e304c9d1d"
+client_id = "8370fd2d95b42d3399d48d42f82c428a"
 name = "OrderStatus"
 application_url = "https://innovative-enjoyment-production.up.railway.app"
 embedded = true

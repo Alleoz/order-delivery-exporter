@@ -1,0 +1,18 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "8370fd2d95b42d3399d40d42f02c428a"
+name = "Order Data Export"
+application_url = "https://innovative-enjoyment-production.up.railway.app"
+embedded = true
+
+[webhooks]
+api_version = "2025-10"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_customers,read_fulfillments,read_orders,read_shipping"
+optional_scopes = [ ]
+use_legacy_install_flow = false
+
+[auth]
+redirect_urls = [ "https://innovative-enjoyment-production.up.railway.app/auth/callback" ]

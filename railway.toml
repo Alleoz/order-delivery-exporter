@@ -3,4 +3,4 @@ builder = "nixpacks"
 buildCommand = "npm run build && npx prisma generate"
 
 [deploy]
-startCommand = "npx prisma migrate deploy && npm run start"
+startCommand = "npx prisma db push && npm run start"
