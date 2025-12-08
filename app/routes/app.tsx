@@ -10,13 +10,35 @@ import { authenticate } from "../shopify.server";
 export const links = () => [{ rel: "stylesheet", href: polarisStyles }];
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
+  console.log("App Loader: Starting");
+  try {
+    console.log("App Loader: Authenticating...");
+    await authenticate.admin(request);
+    console.log("App Loader: Authentication successful");
+  } catch (error) {
+    console.error("App Loader: Authentication failed", error);
+    // If it's a Response (redirect), re-throw it so Remix handles the redirect
+    if (error instanceof Response) throw error;
+    throw error;
+  }
 
-  return { apiKey: process.env.SHOPIFY_API_KEY || "" };
+  const apiKey = process.env.SHOPIFY_API_KEY;
+  console.log("App Loader: API Key present?", !!apiKey);
+
+  return { apiKey: apiKey || "" };
 };
 
 export default function App() {
   const { apiKey } = useLoaderData<typeof loader>();
+
+  if (!apiKey) {
+    return (
+      <div>
+        <h1>Error: Missing API Key</h1>
+        <p>SHOPIFY_API_KEY is not set in the environment variables.</p>
+      </div>
+    );
+  }
 
   return (
     <AppProvider isEmbeddedApp apiKey={apiKey}>
