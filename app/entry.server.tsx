@@ -40,7 +40,7 @@ export default async function handleRequest(
               status: responseStatusCode,
             })
           );
-          body.write("<!DOCTYPE html>");
+          body.write("<!DOCTYPE html>\n");
           pipe(body);
         },
         onShellError(error) {
