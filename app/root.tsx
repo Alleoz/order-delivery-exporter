@@ -7,6 +7,12 @@ import {
 } from "@remix-run/react";
 
 export default function App() {
+  return <Outlet />;
+}
+
+// Layout wraps all routes and provides the HTML structure
+// This ensures proper DOCTYPE and HTML structure
+export function Layout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <head>
@@ -21,7 +27,7 @@ export default function App() {
         <Links />
       </head>
       <body>
-        <Outlet />
+        {children}
         <ScrollRestoration />
         <Scripts />
       </body>
