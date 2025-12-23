@@ -15,4 +15,6 @@ optional_scopes = [ ]
 use_legacy_install_flow = false
 
 [auth]
-redirect_urls = [ "https://innovative-enjoyment-production.up.railway.app/auth/callback" ]
+redirect_urls = [
+  "https://innovative-enjoyment-production.up.railway.app/auth/callback"
+]
