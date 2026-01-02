@@ -3,21 +3,19 @@
  * Provides filtering controls for orders
  */
 
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import {
     Card,
     InlineStack,
     TextField,
-    Select,
     Button,
-    DatePicker,
     Popover,
     BlockStack,
-    Text,
     Icon,
     Box,
+    ChoiceList,
 } from '@shopify/polaris';
-import { CalendarIcon, SearchIcon } from '@shopify/polaris-icons';
+import { SearchIcon } from '@shopify/polaris-icons';
 import type { OrderFilters } from '~/lib/types';
 
 interface OrderFiltersProps {
@@ -35,16 +33,19 @@ export function OrderFiltersComponent({
     onReset,
     loading = false,
 }: OrderFiltersProps) {
+    const [statusPopoverActive, setStatusPopoverActive] = useState(false);
+    const [fulfillmentPopoverActive, setFulfillmentPopoverActive] = useState(false);
+
     const handleQueryChange = useCallback((value: string) => {
         onFiltersChange({ ...filters, query: value });
     }, [filters, onFiltersChange]);
 
-    const handleStatusChange = useCallback((value: string) => {
-        onFiltersChange({ ...filters, status: value });
+    const handleStatusChange = useCallback((value: string[]) => {
+        onFiltersChange({ ...filters, status: value.length > 0 ? value.join(',') : 'all' });
     }, [filters, onFiltersChange]);
 
-    const handleFulfillmentStatusChange = useCallback((value: string) => {
-        onFiltersChange({ ...filters, fulfillmentStatus: value });
+    const handleFulfillmentStatusChange = useCallback((value: string[]) => {
+        onFiltersChange({ ...filters, fulfillmentStatus: value.length > 0 ? value.join(',') : 'all' });
     }, [filters, onFiltersChange]);
 
     const handleDateFromChange = useCallback((value: string) => {
@@ -55,21 +56,13 @@ export function OrderFiltersComponent({
         onFiltersChange({ ...filters, dateTo: value });
     }, [filters, onFiltersChange]);
 
-    const handleKeyPress = useCallback((event: React.KeyboardEvent) => {
-        if (event.key === 'Enter') {
-            onSearch();
-        }
-    }, [onSearch]);
-
     const statusOptions = [
-        { label: 'All Orders', value: 'all' },
         { label: 'Open', value: 'open' },
         { label: 'Closed', value: 'closed' },
         { label: 'Cancelled', value: 'cancelled' },
     ];
 
     const fulfillmentOptions = [
-        { label: 'All Fulfillment', value: 'all' },
         { label: 'Fulfilled', value: 'fulfilled' },
         { label: 'Unfulfilled', value: 'unfulfilled' },
         { label: 'Partially Fulfilled', value: 'partial' },
@@ -83,6 +76,9 @@ export function OrderFiltersComponent({
         filters.fulfillmentStatus !== 'all' ||
         filters.dateFrom !== '' ||
         filters.dateTo !== '';
+
+    const toggleStatusPopover = useCallback(() => setStatusPopoverActive((active) => !active), []);
+    const toggleFulfillmentPopover = useCallback(() => setFulfillmentPopoverActive((active) => !active), []);
 
     return (
         <Card>
@@ -102,21 +98,49 @@ export function OrderFiltersComponent({
                     </Box>
 
                     <Box minWidth="160px">
-                        <Select
-                            label="Order Status"
-                            options={statusOptions}
-                            value={filters.status}
-                            onChange={handleStatusChange}
-                        />
+                        <Popover
+                            active={statusPopoverActive}
+                            activator={
+                                <Button onClick={toggleStatusPopover} disclosure>
+                                    Order Status {filters.status !== 'all' ? `(${filters.status.split(',').length})` : ''}
+                                </Button>
+                            }
+                            onClose={toggleStatusPopover}
+                        >
+                            <Box padding="400">
+                                <ChoiceList
+                                    title="Order Status"
+                                    titleHidden
+                                    choices={statusOptions}
+                                    selected={filters.status === 'all' ? [] : filters.status.split(',')}
+                                    onChange={handleStatusChange}
+                                    allowMultiple
+                                />
+                            </Box>
+                        </Popover>
                     </Box>
 
                     <Box minWidth="180px">
-                        <Select
-                            label="Fulfillment Status"
-                            options={fulfillmentOptions}
-                            value={filters.fulfillmentStatus}
-                            onChange={handleFulfillmentStatusChange}
-                        />
+                        <Popover
+                            active={fulfillmentPopoverActive}
+                            activator={
+                                <Button onClick={toggleFulfillmentPopover} disclosure>
+                                    Fulfillment {filters.fulfillmentStatus !== 'all' ? `(${filters.fulfillmentStatus.split(',').length})` : ''}
+                                </Button>
+                            }
+                            onClose={toggleFulfillmentPopover}
+                        >
+                            <Box padding="400">
+                                <ChoiceList
+                                    title="Fulfillment"
+                                    titleHidden
+                                    choices={fulfillmentOptions}
+                                    selected={filters.fulfillmentStatus === 'all' ? [] : filters.fulfillmentStatus.split(',')}
+                                    onChange={handleFulfillmentStatusChange}
+                                    allowMultiple
+                                />
+                            </Box>
+                        </Popover>
                     </Box>
 
                     <Box minWidth="150px">

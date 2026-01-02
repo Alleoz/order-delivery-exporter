@@ -249,6 +249,16 @@ export const ORDER_BY_ID_QUERY = `
   }
 `;
 
+// Query to get the total count of orders matching a filter
+export const ORDERS_COUNT_QUERY = `
+  query GetOrdersCount($query: String) {
+    ordersCount(query: $query) {
+      count
+      precision
+    }
+  }
+`;
+
 // Build query string for order filtering
 export function buildOrderQueryString(filters: {
   orderId?: string;
@@ -274,15 +284,33 @@ export function buildOrderQueryString(filters: {
   }
 
   if (filters.fulfillmentStatus && filters.fulfillmentStatus !== 'all') {
-    queryParts.push(`fulfillment_status:${filters.fulfillmentStatus}`);
+    const statuses = filters.fulfillmentStatus.split(',');
+    if (statuses.length > 1) {
+      const orParts = statuses.map(s => `fulfillment_status:${s}`).join(' OR ');
+      queryParts.push(`(${orParts})`);
+    } else {
+      queryParts.push(`fulfillment_status:${filters.fulfillmentStatus}`);
+    }
   }
 
   if (filters.financialStatus && filters.financialStatus !== 'all') {
-    queryParts.push(`financial_status:${filters.financialStatus}`);
+    const statuses = filters.financialStatus.split(',');
+    if (statuses.length > 1) {
+      const orParts = statuses.map(s => `financial_status:${s}`).join(' OR ');
+      queryParts.push(`(${orParts})`);
+    } else {
+      queryParts.push(`financial_status:${filters.financialStatus}`);
+    }
   }
 
   if (filters.status && filters.status !== 'all') {
-    queryParts.push(`status:${filters.status}`);
+    const statuses = filters.status.split(',');
+    if (statuses.length > 1) {
+      const orParts = statuses.map(s => `status:${s}`).join(' OR ');
+      queryParts.push(`(${orParts})`);
+    } else {
+      queryParts.push(`status:${filters.status}`);
+    }
   }
 
   return queryParts.join(' AND ');

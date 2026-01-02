@@ -5,7 +5,7 @@
 
 import { authenticate } from "~/shopify.server";
 import { GraphqlQueryError } from "@shopify/shopify-api";
-import { ORDERS_QUERY, ORDER_BY_ID_QUERY, buildOrderQueryString } from "./queries";
+import { ORDERS_QUERY, ORDER_BY_ID_QUERY, ORDERS_COUNT_QUERY, buildOrderQueryString } from "./queries";
 import type { Order, OrdersResponse, PageInfo } from "./types";
 
 export interface FetchOrdersParams {
@@ -127,6 +127,8 @@ function transformOrder(rawOrder: any): Order {
     };
 }
 
+
+
 /**
  * Fetch orders with optional filters and pagination
  */
@@ -151,17 +153,26 @@ export async function fetchOrders(params: FetchOrdersParams): Promise<OrdersResp
     };
 
     try {
-        const response = await admin.graphql(ORDERS_QUERY, {
-            variables: {
-                first: params.first || 25,
-                after: params.after || null,
-                query: queryString || null,
-                sortKey: sortKeyMap[params.sortKey || 'createdAt'] || 'CREATED_AT',
-                reverse: params.reverse ?? true,
-            },
-        });
+        // Run both queries in parallel
+        const [ordersResponse, countResponse] = await Promise.all([
+            admin.graphql(ORDERS_QUERY, {
+                variables: {
+                    first: params.first || 50,
+                    after: params.after || null,
+                    query: queryString || null,
+                    sortKey: sortKeyMap[params.sortKey || 'createdAt'] || 'CREATED_AT',
+                    reverse: params.reverse ?? true,
+                },
+            }),
+            admin.graphql(ORDERS_COUNT_QUERY, {
+                variables: {
+                    query: queryString || null,
+                },
+            }),
+        ]);
 
-        const data: any = await response.json();
+        const data: any = await ordersResponse.json();
+        const countData: any = await countResponse.json();
 
         if (data.errors) {
             console.error('GraphQL Errors:', JSON.stringify(data.errors, null, 2));
@@ -170,7 +181,9 @@ export async function fetchOrders(params: FetchOrdersParams): Promise<OrdersResp
 
         const orders = data.data.orders.edges.map((edge: any) => transformOrder(edge.node));
         const pageInfo: PageInfo = data.data.orders.pageInfo;
-        const totalCount = orders.length;
+
+        // Use the count from the separate query, fallback to orders length if failed (though Promise.all would reject)
+        const totalCount = countData.data?.ordersCount?.count ?? orders.length;
 
         return {
             orders,
