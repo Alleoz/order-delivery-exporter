@@ -51,7 +51,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     try {
         const result = await fetchOrders({
             request,
-            first: 25,
+            first: 50,
             after,
             orderId: query,
             dateFrom: dateFrom || undefined,
@@ -387,7 +387,7 @@ export default function OrdersPage() {
                     {/* Orders Table */}
                     {!isLoading && loaderData.orders.length > 0 && (
                         <OrderTable
-                            orders={loaderData.orders}
+                            orders={loaderData.orders as Order[]}
                             selectedOrderIds={selectedOrderIds}
                             onSelectionChange={setSelectedOrderIds}
                             onViewDetails={handleViewDetails}
@@ -416,9 +416,10 @@ export default function OrdersPage() {
                                 hasNext={loaderData.pageInfo.hasNextPage}
                                 onNext={handleNextPage}
                                 onPrevious={() => {
-                                    // For simplicity, we'll just refresh without cursor
-                                    // A full implementation would track previous cursors
-                                    submit(new URLSearchParams(window.location.search), { method: 'get' });
+                                    const params = new URLSearchParams(window.location.search);
+                                    params.delete('after');
+                                    params.delete('before');
+                                    submit(params, { method: 'get' });
                                 }}
                             />
                         </InlineStack>
