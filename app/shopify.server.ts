@@ -1,4 +1,4 @@
-import "@shopify/shopify-app-remix/adapters/node";
+import "@shopify/shopify-app-remix/adapters/vercel";
 import {
   ApiVersion,
   AppDistribution,
@@ -17,7 +17,7 @@ const shopify = shopifyApp({
     "read_orders",
     "read_shipping",
   ],
-  appUrl: process.env.SHOPIFY_APP_URL || "",
+  appUrl: process.env.SHOPIFY_APP_URL || ("https://" + process.env.VERCEL_URL),
   authPathPrefix: "/auth",
   sessionStorage: new PrismaSessionStorage(prisma),
   distribution: AppDistribution.SingleMerchant,
