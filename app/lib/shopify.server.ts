@@ -17,6 +17,7 @@ export interface FetchOrdersParams {
     dateTo?: string;
     fulfillmentStatus?: string;
     financialStatus?: string;
+    deliveryStatus?: string;
     status?: string;
     sortKey?: string;
     reverse?: boolean;
@@ -141,6 +142,7 @@ export async function fetchOrders(params: FetchOrdersParams): Promise<OrdersResp
         dateTo: params.dateTo,
         fulfillmentStatus: params.fulfillmentStatus,
         financialStatus: params.financialStatus,
+        deliveryStatus: params.deliveryStatus,
         status: params.status,
     });
 

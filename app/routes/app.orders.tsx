@@ -22,6 +22,7 @@ import {
     Toast,
     Frame,
     Badge,
+    Box,
 } from '@shopify/polaris';
 import { ExportIcon, RefreshIcon } from '@shopify/polaris-icons';
 
@@ -42,6 +43,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const query = url.searchParams.get('query') || '';
     const status = url.searchParams.get('status') || 'all';
     const fulfillmentStatus = url.searchParams.get('fulfillmentStatus') || 'all';
+    const deliveryStatus = url.searchParams.get('deliveryStatus') || 'all';
     const dateFrom = url.searchParams.get('dateFrom') || '';
     const dateTo = url.searchParams.get('dateTo') || '';
     const after = url.searchParams.get('after') || undefined;
@@ -57,6 +59,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
             dateFrom: dateFrom || undefined,
             dateTo: dateTo || undefined,
             fulfillmentStatus: fulfillmentStatus !== 'all' ? fulfillmentStatus : undefined,
+            deliveryStatus: deliveryStatus !== 'all' ? deliveryStatus : undefined,
             status: status !== 'all' ? status : undefined,
             sortKey,
             reverse: sortDir === 'desc',
@@ -66,7 +69,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
             orders: result.orders,
             pageInfo: result.pageInfo,
             totalCount: result.totalCount,
-            filters: { query, status, fulfillmentStatus, dateFrom, dateTo },
+            filters: { query, status, fulfillmentStatus, deliveryStatus, dateFrom, dateTo },
             sortConfig: { column: sortKey, direction: sortDir },
             lastSynced: new Date().toISOString(),
             error: null,
@@ -77,7 +80,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
             orders: [],
             pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null },
             totalCount: 0,
-            filters: { query, status, fulfillmentStatus, dateFrom, dateTo },
+            filters: { query, status, fulfillmentStatus, deliveryStatus, dateFrom, dateTo },
             sortConfig: { column: sortKey, direction: sortDir },
             lastSynced: new Date().toISOString(),
             error: 'Failed to fetch orders. Please try again.',
@@ -148,6 +151,7 @@ export default function OrdersPage() {
         query: loaderData.filters.query,
         status: loaderData.filters.status,
         fulfillmentStatus: loaderData.filters.fulfillmentStatus,
+        deliveryStatus: loaderData.filters.deliveryStatus,
         dateFrom: loaderData.filters.dateFrom,
         dateTo: loaderData.filters.dateTo,
     });
@@ -195,6 +199,7 @@ export default function OrdersPage() {
         if (filters.query) params.set('query', filters.query);
         if (filters.status !== 'all') params.set('status', filters.status);
         if (filters.fulfillmentStatus !== 'all') params.set('fulfillmentStatus', filters.fulfillmentStatus);
+        if (filters.deliveryStatus !== 'all') params.set('deliveryStatus', filters.deliveryStatus);
         if (filters.dateFrom) params.set('dateFrom', filters.dateFrom);
         if (filters.dateTo) params.set('dateTo', filters.dateTo);
         params.set('sortKey', sortConfig.column);
@@ -209,6 +214,7 @@ export default function OrdersPage() {
             query: '',
             status: 'all',
             fulfillmentStatus: 'all',
+            deliveryStatus: 'all',
             dateFrom: '',
             dateTo: '',
         });
@@ -222,6 +228,7 @@ export default function OrdersPage() {
         if (filters.query) params.set('query', filters.query);
         if (filters.status !== 'all') params.set('status', filters.status);
         if (filters.fulfillmentStatus !== 'all') params.set('fulfillmentStatus', filters.fulfillmentStatus);
+        if (filters.deliveryStatus !== 'all') params.set('deliveryStatus', filters.deliveryStatus);
         if (filters.dateFrom) params.set('dateFrom', filters.dateFrom);
         if (filters.dateTo) params.set('dateTo', filters.dateTo);
         params.set('sortKey', config.column);
@@ -308,7 +315,7 @@ export default function OrdersPage() {
                     },
                 ]}
             >
-                <BlockStack gap="500">
+                <BlockStack gap="400">
                     {/* Error Banner */}
                     {loaderData.error && (
                         <Banner tone="critical" onDismiss={() => { }}>
@@ -316,28 +323,45 @@ export default function OrdersPage() {
                         </Banner>
                     )}
 
-                    {/* Stats Bar */}
-                    <Card>
-                        <InlineStack gap="400" align="space-between" blockAlign="center">
-                            <InlineStack gap="400">
-                                <BlockStack gap="100">
-                                    <Text variant="bodySm" tone="subdued" as="p">Total Orders</Text>
-                                    <Text variant="headingLg" as="p">{loaderData.totalCount.toLocaleString()}</Text>
-                                </BlockStack>
+                    {/* Dashboard Header / Stats */}
+                    <Card padding="0">
+                        <Box padding="400">
+                            <InlineStack gap="600" align="space-between" blockAlign="center">
+                                <InlineStack gap="600" align="start" blockAlign="center">
+                                    <Box>
+                                        <BlockStack gap="100">
+                                            <Text variant="bodySm" tone="subdued" as="p" fontWeight="medium">Total Orders</Text>
+                                            <InlineStack gap="100" blockAlign="center">
+                                                <Text variant="headingXl" as="p">{loaderData.totalCount.toLocaleString()}</Text>
+                                                {loaderData.totalCount > 0 && <Badge tone="info">+Live</Badge>}
+                                            </InlineStack>
+                                        </BlockStack>
+                                    </Box>
 
-                                <BlockStack gap="100">
-                                    <Text variant="bodySm" tone="subdued" as="p">Selected</Text>
-                                    <Text variant="headingLg" as="p">{selectedOrderIds.length}</Text>
-                                </BlockStack>
-                            </InlineStack>
+                                    <div style={{ width: '1px', height: '40px', backgroundColor: 'var(--p-color-border-subdued)' }} />
 
-                            <InlineStack gap="200" blockAlign="center">
-                                <Text variant="bodySm" tone="subdued" as="span">
-                                    Last synced: {formatLastSynced(loaderData.lastSynced)}
-                                </Text>
-                                <Badge tone="success">Live</Badge>
+                                    <Box>
+                                        <BlockStack gap="100">
+                                            <Text variant="bodySm" tone="subdued" as="p" fontWeight="medium">Selected for Export</Text>
+                                            <Text variant="headingXl" as="p" tone={selectedOrderIds.length > 0 ? 'success' : undefined}>
+                                                {selectedOrderIds.length}
+                                            </Text>
+                                        </BlockStack>
+                                    </Box>
+                                </InlineStack>
+
+                                <Box padding="300" background="bg-surface-secondary" borderRadius="200">
+                                    <BlockStack gap="100" align="end">
+                                        <Text variant="bodySm" tone="subdued" as="span">
+                                            Last database sync
+                                        </Text>
+                                        <Text variant="bodyMd" fontWeight="semibold" as="span">
+                                            {formatLastSynced(loaderData.lastSynced)}
+                                        </Text>
+                                    </BlockStack>
+                                </Box>
                             </InlineStack>
-                        </InlineStack>
+                        </Box>
                     </Card>
 
                     {/* Filters */}
@@ -349,29 +373,35 @@ export default function OrdersPage() {
                         loading={isLoading}
                     />
 
-                    {/* Selection Actions */}
+                    {/* Selection Actions Banner */}
                     {selectedOrderIds.length > 0 && (
-                        <Card>
-                            <InlineStack gap="300" align="space-between" blockAlign="center">
-                                <InlineStack gap="300">
-                                    <Text variant="bodyMd" as="span">
+                        <Box
+                            background="bg-surface-brand-selected"
+                            padding="300"
+                            borderRadius="200"
+                            borderWidth="025"
+                            borderColor="border-brand"
+                        >
+                            <InlineStack gap="400" align="space-between" blockAlign="center">
+                                <InlineStack gap="300" blockAlign="center">
+                                    <Text variant="bodyMd" as="span" fontWeight="semibold">
                                         {selectedOrderIds.length} order{selectedOrderIds.length !== 1 ? 's' : ''} selected
                                     </Text>
                                     <Button variant="plain" onClick={() => setSelectedOrderIds([])}>
-                                        Clear selection
+                                        Clear
                                     </Button>
                                 </InlineStack>
 
                                 <InlineStack gap="300">
                                     <Button onClick={handleSelectAll}>
-                                        {selectedOrderIds.length === loaderData.orders.length ? 'Deselect All' : 'Select All'}
+                                        {selectedOrderIds.length === loaderData.orders.length ? 'Deselect All' : 'Select current page'}
                                     </Button>
-                                    <Button variant="primary" onClick={() => setShowExportModal(true)}>
-                                        Export Selected
+                                    <Button variant="primary" icon={ExportIcon} onClick={() => setShowExportModal(true)}>
+                                        Export CSV / Excel
                                     </Button>
                                 </InlineStack>
                             </InlineStack>
-                        </Card>
+                        </Box>
                     )}
 
                     {/* Loading State */}

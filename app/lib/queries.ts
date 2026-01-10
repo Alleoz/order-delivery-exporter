@@ -267,12 +267,23 @@ export function buildOrderQueryString(filters: {
   fulfillmentStatus?: string;
   financialStatus?: string;
   status?: string;
+  deliveryStatus?: string;
 }): string {
   const queryParts: string[] = [];
 
   if (filters.orderId) {
     // Search by order name (e.g., "1001" matches "#1001")
     queryParts.push(`name:*${filters.orderId}*`);
+  }
+
+  if (filters.deliveryStatus && filters.deliveryStatus !== 'all') {
+    const statuses = filters.deliveryStatus.split(',');
+    if (statuses.length > 1) {
+      const orParts = statuses.map(s => `delivery_status:${s}`).join(' OR ');
+      queryParts.push(`(${orParts})`);
+    } else {
+      queryParts.push(`delivery_status:${filters.deliveryStatus}`);
+    }
   }
 
   if (filters.dateFrom) {

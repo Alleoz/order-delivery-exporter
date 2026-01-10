@@ -48,6 +48,10 @@ export function OrderFiltersComponent({
         onFiltersChange({ ...filters, fulfillmentStatus: value.length > 0 ? value.join(',') : 'all' });
     }, [filters, onFiltersChange]);
 
+    const handleDeliveryStatusChange = useCallback((value: string[]) => {
+        onFiltersChange({ ...filters, deliveryStatus: value.length > 0 ? value.join(',') : 'all' });
+    }, [filters, onFiltersChange]);
+
     const handleDateFromChange = useCallback((value: string) => {
         onFiltersChange({ ...filters, dateFrom: value });
     }, [filters, onFiltersChange]);
@@ -70,21 +74,37 @@ export function OrderFiltersComponent({
         { label: 'On Hold', value: 'on_hold' },
     ];
 
+    const deliveryOptions = [
+        { label: 'Scheduled', value: 'scheduled' },
+        { label: 'In Transit', value: 'in_transit' },
+        { label: 'Out for Delivery', value: 'out_for_delivery' },
+        { label: 'Delivered', value: 'delivered' },
+        { label: 'Delivery Failed', value: 'failure' },
+        { label: 'Attempted Delivery', value: 'attempted_delivery' },
+        { label: 'Ready for Pickup', value: 'ready_for_pickup' },
+        { label: 'Picked Up', value: 'picked_up' },
+        { label: 'Label Printed', value: 'label_printed' },
+        { label: 'Label Purchased', value: 'label_purchased' },
+    ];
+
     const hasActiveFilters =
         filters.query !== '' ||
         filters.status !== 'all' ||
         filters.fulfillmentStatus !== 'all' ||
+        filters.deliveryStatus !== 'all' ||
         filters.dateFrom !== '' ||
         filters.dateTo !== '';
 
     const toggleStatusPopover = useCallback(() => setStatusPopoverActive((active) => !active), []);
     const toggleFulfillmentPopover = useCallback(() => setFulfillmentPopoverActive((active) => !active), []);
+    const [deliveryPopoverActive, setDeliveryPopoverActive] = useState(false);
+    const toggleDeliveryPopover = useCallback(() => setDeliveryPopoverActive((active) => !active), []);
 
     return (
         <Card>
             <BlockStack gap="400">
-                <InlineStack gap="400" wrap align="start" blockAlign="end">
-                    <Box minWidth="200px">
+                <InlineStack gap="400" align="start" blockAlign="end">
+                    <div style={{ flex: '1 1 300px' }}>
                         <TextField
                             label="Search"
                             placeholder="Order #, customer name, email..."
@@ -95,9 +115,9 @@ export function OrderFiltersComponent({
                             clearButton
                             onClearButtonClick={() => handleQueryChange('')}
                         />
-                    </Box>
+                    </div>
 
-                    <Box minWidth="160px">
+                    <Box minWidth="150px">
                         <Popover
                             active={statusPopoverActive}
                             activator={
@@ -106,6 +126,7 @@ export function OrderFiltersComponent({
                                 </Button>
                             }
                             onClose={toggleStatusPopover}
+                            fullWidth
                         >
                             <Box padding="400">
                                 <ChoiceList
@@ -120,7 +141,7 @@ export function OrderFiltersComponent({
                         </Popover>
                     </Box>
 
-                    <Box minWidth="180px">
+                    <Box minWidth="150px">
                         <Popover
                             active={fulfillmentPopoverActive}
                             activator={
@@ -129,6 +150,7 @@ export function OrderFiltersComponent({
                                 </Button>
                             }
                             onClose={toggleFulfillmentPopover}
+                            fullWidth
                         >
                             <Box padding="400">
                                 <ChoiceList
@@ -144,6 +166,32 @@ export function OrderFiltersComponent({
                     </Box>
 
                     <Box minWidth="150px">
+                        <Popover
+                            active={deliveryPopoverActive}
+                            activator={
+                                <Button onClick={toggleDeliveryPopover} disclosure>
+                                    Delivery {filters.deliveryStatus !== 'all' ? `(${filters.deliveryStatus.split(',').length})` : ''}
+                                </Button>
+                            }
+                            onClose={toggleDeliveryPopover}
+                            fullWidth
+                        >
+                            <Box padding="400">
+                                <ChoiceList
+                                    title="Delivery Status"
+                                    titleHidden
+                                    choices={deliveryOptions}
+                                    selected={filters.deliveryStatus === 'all' ? [] : filters.deliveryStatus.split(',')}
+                                    onChange={handleDeliveryStatusChange}
+                                    allowMultiple
+                                />
+                            </Box>
+                        </Popover>
+                    </Box>
+                </InlineStack>
+
+                <InlineStack gap="400" align="start" blockAlign="end">
+                    <div style={{ flex: '1 1 150px' }}>
                         <TextField
                             label="Date From"
                             type="date"
@@ -151,9 +199,9 @@ export function OrderFiltersComponent({
                             onChange={handleDateFromChange}
                             autoComplete="off"
                         />
-                    </Box>
+                    </div>
 
-                    <Box minWidth="150px">
+                    <div style={{ flex: '1 1 150px' }}>
                         <TextField
                             label="Date To"
                             type="date"
@@ -161,27 +209,27 @@ export function OrderFiltersComponent({
                             onChange={handleDateToChange}
                             autoComplete="off"
                         />
-                    </Box>
-                </InlineStack>
+                    </div>
 
-                <InlineStack gap="300">
-                    <Button
-                        variant="primary"
-                        onClick={onSearch}
-                        loading={loading}
-                    >
-                        Apply Filters
-                    </Button>
-
-                    {hasActiveFilters && (
+                    <InlineStack gap="200" align="end">
                         <Button
-                            variant="plain"
-                            onClick={onReset}
-                            disabled={loading}
+                            variant="primary"
+                            onClick={onSearch}
+                            loading={loading}
                         >
-                            Reset Filters
+                            Apply Filters
                         </Button>
-                    )}
+
+                        {hasActiveFilters && (
+                            <Button
+                                variant="plain"
+                                onClick={onReset}
+                                disabled={loading}
+                            >
+                                Reset
+                            </Button>
+                        )}
+                    </InlineStack>
                 </InlineStack>
             </BlockStack>
         </Card>

@@ -2,7 +2,7 @@
 
 client_id = "8370fd2d95b42d3399d40d42f02c428a"
 name = "Order Data Export"
-application_url = "https://innovative-enjoyment-production.up.railway.app"
+application_url = "https://order-delivery-exporter.vercel.app"
 embedded = true
 
 [webhooks]
@@ -16,5 +16,7 @@ use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [
-  "https://innovative-enjoyment-production.up.railway.app/auth/callback"
+  "https://order-delivery-exporter.vercel.app/auth/callback",
+  "https://order-delivery-exporter.vercel.app/auth/shopify/callback",
+  "https://order-delivery-exporter.vercel.app/api/webhooks"
 ]

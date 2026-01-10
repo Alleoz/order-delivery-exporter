@@ -135,6 +135,7 @@ export interface OrderFilters {
     query: string;
     status: string;
     fulfillmentStatus: string;
+    deliveryStatus: string;
     dateFrom: string;
     dateTo: string;
 }
