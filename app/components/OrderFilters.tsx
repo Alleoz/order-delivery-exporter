@@ -124,9 +124,8 @@ export function OrderFiltersComponent({
                             </Button>
                         }
                         onClose={toggleStatusPopover}
-                        fullWidth
                     >
-                        <Box minWidth="320px" padding="400">
+                        <Box minWidth="350px" padding="400">
                             <ChoiceList
                                 title="Order Status"
                                 titleHidden
@@ -148,9 +147,8 @@ export function OrderFiltersComponent({
                             </Button>
                         }
                         onClose={toggleFulfillmentPopover}
-                        fullWidth
                     >
-                        <Box minWidth="320px" padding="400">
+                        <Box minWidth="350px" padding="400">
                             <ChoiceList
                                 title="Fulfillment"
                                 titleHidden
@@ -172,9 +170,8 @@ export function OrderFiltersComponent({
                             </Button>
                         }
                         onClose={toggleDeliveryPopover}
-                        fullWidth
                     >
-                        <Box minWidth="320px" padding="400">
+                        <Box minWidth="400px" padding="400">
                             <ChoiceList
                                 title="Delivery Status"
                                 titleHidden
