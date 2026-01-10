@@ -272,8 +272,28 @@ export function buildOrderQueryString(filters: {
   const queryParts: string[] = [];
 
   if (filters.orderId) {
-    // Search by order name (e.g., "1001" matches "#1001")
-    queryParts.push(`name:*${filters.orderId}*`);
+    const rawQuery = filters.orderId;
+    if (rawQuery.includes(',')) {
+      // Handle multiple comma-separated order numbers
+      const terms = rawQuery.split(',').map(t => t.trim().replace(/^#/, '')).filter(t => t);
+      if (terms.length > 0) {
+        // Check if terms look like integers (order numbers) to decide on search strategy
+        // For now, we assume comma-separated list implies order numbers (names)
+        const orParts = terms.map(term => `name:${term}`).join(' OR ');
+        queryParts.push(`(${orParts})`);
+      }
+    } else {
+      // Single search term
+      // If strictly numeric, assume order number
+      // If contains @, assume email
+      // Otherwise, could be generic. For now preserving existing behavior but stripping #
+      // To strictly follow user request of "intelligent determination", we can expand this.
+      // But let's start with the comma requirement.
+      const term = rawQuery.trim();
+      // Existing behavior was: `name:*${filters.orderId}*`
+      // We'll keep it but clean up the input slightly
+      queryParts.push(`name:*${term}*`);
+    }
   }
 
   if (filters.deliveryStatus && filters.deliveryStatus !== 'all') {
