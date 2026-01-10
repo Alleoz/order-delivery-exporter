@@ -192,10 +192,22 @@ export function OrderTable({
                 : selectedOrderIds.filter(x => x !== id);
             onSelectionChange(newSelection);
         } else if (selectionType === 'multi') {
-            if (Array.isArray(selection)) {
-                const ids = selection;
-                const others = selectedOrderIds.filter(id => !ids.includes(id));
-                onSelectionChange(isSelecting ? [...others, ...ids] : others);
+            if (!selection) return;
+            const selectionList = selection as string[] | [number, number];
+
+            if (Array.isArray(selectionList) && selectionList.length > 0) {
+                // Check if it's a Range (numbers)
+                if (typeof selectionList[0] === 'number') {
+                    const [start, end] = selectionList as [number, number];
+                    const rangeIds = orders.slice(start, end + 1).map(o => o.id);
+                    const others = selectedOrderIds.filter(id => !rangeIds.includes(id));
+                    onSelectionChange(isSelecting ? [...others, ...rangeIds] : others);
+                } else {
+                    // It's a list of IDs (strings)
+                    const ids = selectionList as string[];
+                    const others = selectedOrderIds.filter(id => !ids.includes(id));
+                    onSelectionChange(isSelecting ? [...others, ...ids] : others);
+                }
             }
         }
     }, [selectedOrderIds, orders, onSelectionChange]);
@@ -261,12 +273,12 @@ export function OrderTable({
                                 {tracking.trackingUrl ? (
                                     <Link url={tracking.trackingUrl} target="_blank" removeUnderline>
                                         <Text variant="bodySm" as="span" tone="magic">
-                                            #{tracking.trackingNumber.slice(-4)}
+                                            {tracking.trackingNumber}
                                         </Text>
                                     </Link>
                                 ) : (
                                     <Text variant="bodySm" as="span" tone="subdued">
-                                        #{tracking.trackingNumber.slice(-4)}
+                                        {tracking.trackingNumber}
                                     </Text>
                                 )}
                             </InlineStack>
@@ -290,10 +302,10 @@ export function OrderTable({
                 }
                 onSelectionChange={handleSelection}
                 headings={[
-                    { title: 'Order', value: 'name' },
-                    { title: 'Date', value: 'createdAt' },
-                    { title: 'Customer', value: 'customer' },
-                    { title: 'Total', value: 'totalPrice', alignment: 'end' },
+                    { title: 'Order' },
+                    { title: 'Date' },
+                    { title: 'Customer' },
+                    { title: 'Total', alignment: 'end' },
                     { title: 'Payment' },
                     { title: 'Fulfillment' },
                     { title: 'Delivery' },
