@@ -1,24 +1,18 @@
-/**
- * Order Delivery Exporter - Order Table Component
- * Displays orders in a sortable, filterable Polaris DataTable
- */
-
-import { useCallback, useState } from 'react';
+import { useCallback } from 'react';
 import {
     Card,
-    DataTable,
+    IndexTable,
     Badge,
     Button,
     Link,
     Text,
     InlineStack,
     BlockStack,
-    Checkbox,
-    Thumbnail,
     Box,
     Tooltip,
 } from '@shopify/polaris';
 import type { Order, SortConfig } from '~/lib/types';
+import { ViewIcon } from '@shopify/polaris-icons';
 
 interface OrderTableProps {
     orders: Order[];
@@ -69,6 +63,14 @@ function formatCurrency(amount: string | undefined, currency: string | undefined
 }
 
 /**
+ * Helper to capitalize text
+ */
+function capitalize(str: string | null): string {
+    if (!str) return '';
+    return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase().replace(/_/g, ' ');
+}
+
+/**
  * Get badge for financial status
  */
 function getFinancialBadge(status: string | null) {
@@ -84,7 +86,7 @@ function getFinancialBadge(status: string | null) {
         VOIDED: { tone: 'critical', label: 'Voided' },
     };
 
-    const config = statusMap[status] || { tone: 'info' as const, label: status };
+    const config = statusMap[status] || { tone: 'info' as const, label: capitalize(status) };
     return <Badge tone={config.tone}>{config.label}</Badge>;
 }
 
@@ -102,7 +104,7 @@ function getFulfillmentBadge(status: string | null) {
         ON_HOLD: { tone: 'warning', label: 'On Hold' },
     };
 
-    const config = statusMap[status] || { tone: 'info' as const, label: status };
+    const config = statusMap[status] || { tone: 'info' as const, label: capitalize(status) };
     return <Badge tone={config.tone}>{config.label}</Badge>;
 }
 
@@ -114,6 +116,7 @@ function getDeliveryBadge(order: Order) {
     if (!fulfillment) return <Badge>Not Shipped</Badge>;
 
     const status = fulfillment.displayStatus;
+    // Default to processing if no display status but exists
     if (!status) return <Badge tone="info">Processing</Badge>;
 
     const statusMap: Record<string, { tone: 'success' | 'warning' | 'attention' | 'info' | 'critical'; label: string }> = {
@@ -126,11 +129,11 @@ function getDeliveryBadge(order: Order) {
         CONFIRMED: { tone: 'info', label: 'Confirmed' },
         LABEL_PRINTED: { tone: 'info', label: 'Label Printed' },
         LABEL_PURCHASED: { tone: 'info', label: 'Label Purchased' },
-        FAILURE: { tone: 'critical', label: 'Delivery Failed' },
+        FAILURE: { tone: 'critical', label: 'Failed' },
         CANCELED: { tone: 'critical', label: 'Canceled' },
     };
 
-    const config = statusMap[status] || { tone: 'info' as const, label: status.replace(/_/g, ' ') };
+    const config = statusMap[status] || { tone: 'info' as const, label: capitalize(status) };
     return <Badge tone={config.tone}>{config.label}</Badge>;
 }
 
@@ -142,7 +145,7 @@ function getTrackingInfo(order: Order): { carrier: string; trackingNumber: strin
         for (const tracking of fulfillment.trackingInfo || []) {
             if (tracking.number) {
                 return {
-                    carrier: tracking.company || 'Unknown Carrier',
+                    carrier: tracking.company || 'Carrier',
                     trackingNumber: tracking.number,
                     trackingUrl: tracking.url,
                 };
@@ -161,163 +164,150 @@ export function OrderTable({
     onSortChange,
     loading = false,
 }: OrderTableProps) {
-    const handleSelectAll = useCallback((checked: boolean) => {
-        if (checked) {
-            onSelectionChange(orders.map(o => o.id));
-        } else {
-            onSelectionChange([]);
-        }
-    }, [orders, onSelectionChange]);
+    const resourceName = {
+        singular: 'order',
+        plural: 'orders',
+    };
 
-    const handleSelectOne = useCallback((orderId: string, checked: boolean) => {
-        if (checked) {
-            onSelectionChange([...selectedOrderIds, orderId]);
-        } else {
-            onSelectionChange(selectedOrderIds.filter(id => id !== orderId));
-        }
-    }, [selectedOrderIds, onSelectionChange]);
-
-    const allSelected = orders.length > 0 && selectedOrderIds.length === orders.length;
-    const someSelected = selectedOrderIds.length > 0 && selectedOrderIds.length < orders.length;
-
-    const handleSort = useCallback((headingIndex: number) => {
-        const columnKeys = ['', 'name', 'createdAt', 'customer', 'totalPrice', '', '', '', ''];
+    const handleSort = useCallback((headingIndex: number, direction: 'ascending' | 'descending') => {
+        const columnKeys = ['name', 'createdAt', 'customer', 'totalPrice'];
         const key = columnKeys[headingIndex];
         if (!key) return;
 
-        const newDirection = sortConfig.column === key && sortConfig.direction === 'asc' ? 'desc' : 'asc';
+        const newDirection = direction === 'ascending' ? 'asc' : 'desc';
         onSortChange({ column: key, direction: newDirection });
-    }, [sortConfig, onSortChange]);
+    }, [onSortChange]);
 
-    const rows = orders.map((order) => {
+    const handleSelection = useCallback((
+        selectionType: string,
+        isSelecting: boolean,
+        selection?: string | [number, number]
+    ) => {
+        if (selectionType === 'all' || selectionType === 'page') {
+            onSelectionChange(isSelecting ? orders.map(o => o.id) : []);
+        } else if (selectionType === 'single') {
+            const id = selection as string;
+            const newSelection = isSelecting
+                ? [...selectedOrderIds, id]
+                : selectedOrderIds.filter(x => x !== id);
+            onSelectionChange(newSelection);
+        } else if (selectionType === 'multi') {
+            if (Array.isArray(selection)) {
+                const ids = selection;
+                const others = selectedOrderIds.filter(id => !ids.includes(id));
+                onSelectionChange(isSelecting ? [...others, ...ids] : others);
+            }
+        }
+    }, [selectedOrderIds, orders, onSelectionChange]);
+
+    const rowMarkup = orders.map((order, index) => {
         const tracking = getTrackingInfo(order);
-        const isSelected = selectedOrderIds.includes(order.id);
         const currency = order.totalPriceSet?.shopMoney?.currencyCode;
 
-        return [
-            // Checkbox
-            <Checkbox
-                label=""
-                labelHidden
-                checked={isSelected}
-                onChange={(checked) => handleSelectOne(order.id, checked)}
-            />,
-            // Order Number
-            <Link
-                monochrome
-                removeUnderline
-                onClick={() => onViewDetails(order)}
+        return (
+            <IndexTable.Row
+                id={order.id}
+                key={order.id}
+                selected={selectedOrderIds.includes(order.id)}
+                position={index}
             >
-                <Text variant="bodyMd" fontWeight="semibold" as="span">
-                    {order.name}
-                </Text>
-            </Link>,
-            // Date
-            <Tooltip content={formatDateTime(order.createdAt)}>
-                <Text variant="bodyMd" as="span">
-                    {formatDate(order.createdAt)}
-                </Text>
-            </Tooltip>,
-            // Customer
-            <BlockStack gap="100">
-                <Text variant="bodyMd" as="span">
-                    {order.customer
-                        ? `${order.customer.firstName || ''} ${order.customer.lastName || ''}`.trim() || 'Guest'
-                        : 'Guest'}
-                </Text>
-                {order.customer?.email && (
-                    <Text variant="bodySm" tone="subdued" as="span">
-                        {order.customer.email}
-                    </Text>
-                )}
-            </BlockStack>,
-            // Total
-            <Text variant="bodyMd" fontWeight="semibold" as="span">
-                {formatCurrency(order.totalPriceSet?.shopMoney?.amount, currency)}
-            </Text>,
-            // Financial Status
-            getFinancialBadge(order.displayFinancialStatus),
-            // Fulfillment Status
-            getFulfillmentBadge(order.displayFulfillmentStatus),
-            // Delivery Status
-            <BlockStack gap="100">
-                {getDeliveryBadge(order)}
-                {tracking && (
-                    <InlineStack gap="100" wrap={false}>
-                        <Text variant="bodySm" tone="subdued" as="span">
-                            {tracking.carrier}
+                <IndexTable.Cell>
+                    <Link
+                        monochrome
+                        removeUnderline
+                        onClick={() => onViewDetails(order)}
+                    >
+                        <Text variant="bodyMd" fontWeight="semibold" as="span">
+                            {order.name}
                         </Text>
-                        {tracking.trackingUrl ? (
-                            <Link url={tracking.trackingUrl} target="_blank" removeUnderline>
-                                <Text variant="bodySm" as="span">
-                                    {tracking.trackingNumber.length > 12
-                                        ? `${tracking.trackingNumber.slice(0, 12)}...`
-                                        : tracking.trackingNumber}
-                                </Text>
-                            </Link>
-                        ) : (
-                            <Text variant="bodySm" as="span">
-                                {tracking.trackingNumber}
+                    </Link>
+                </IndexTable.Cell>
+                <IndexTable.Cell>
+                    <Tooltip content={formatDateTime(order.createdAt)}>
+                        <Text variant="bodyMd" as="span">
+                            {formatDate(order.createdAt)}
+                        </Text>
+                    </Tooltip>
+                </IndexTable.Cell>
+                <IndexTable.Cell>
+                    <BlockStack gap="050">
+                        <Text variant="bodyMd" as="span" fontWeight="medium">
+                            {order.customer
+                                ? `${order.customer.firstName || ''} ${order.customer.lastName || ''}`.trim() || 'Guest'
+                                : 'Guest'}
+                        </Text>
+                        {order.customer?.email && (
+                            <Text variant="bodySm" tone="subdued" as="span">
+                                {order.customer.email}
                             </Text>
                         )}
-                    </InlineStack>
-                )}
-            </BlockStack>,
-            // Actions
-            <Button
-                variant="plain"
-                onClick={() => onViewDetails(order)}
-            >
-                View
-            </Button>,
-        ];
+                    </BlockStack>
+                </IndexTable.Cell>
+                <IndexTable.Cell>
+                    <Text variant="bodyMd" as="span" alignment="end">
+                        {formatCurrency(order.totalPriceSet?.shopMoney?.amount, currency)}
+                    </Text>
+                </IndexTable.Cell>
+                <IndexTable.Cell>{getFinancialBadge(order.displayFinancialStatus)}</IndexTable.Cell>
+                <IndexTable.Cell>{getFulfillmentBadge(order.displayFulfillmentStatus)}</IndexTable.Cell>
+                <IndexTable.Cell>
+                    <BlockStack gap="100">
+                        <Box>{getDeliveryBadge(order)}</Box>
+                        {tracking && (
+                            <InlineStack gap="100" wrap={false} align="start" blockAlign="center">
+                                <Text variant="bodySm" tone="subdued" as="span">
+                                    {tracking.carrier}
+                                </Text>
+                                {tracking.trackingUrl ? (
+                                    <Link url={tracking.trackingUrl} target="_blank" removeUnderline>
+                                        <Text variant="bodySm" as="span" tone="magic">
+                                            #{tracking.trackingNumber.slice(-4)}
+                                        </Text>
+                                    </Link>
+                                ) : (
+                                    <Text variant="bodySm" as="span" tone="subdued">
+                                        #{tracking.trackingNumber.slice(-4)}
+                                    </Text>
+                                )}
+                            </InlineStack>
+                        )}
+                    </BlockStack>
+                </IndexTable.Cell>
+                <IndexTable.Cell>
+                    <Button variant="plain" icon={ViewIcon} onClick={() => onViewDetails(order)} accessibilityLabel="View Details" />
+                </IndexTable.Cell>
+            </IndexTable.Row>
+        );
     });
 
     return (
         <Card padding="0">
-            <DataTable
-                columnContentTypes={[
-                    'text', // Checkbox
-                    'text', // Order
-                    'text', // Date
-                    'text', // Customer
-                    'numeric', // Total
-                    'text', // Financial
-                    'text', // Fulfillment
-                    'text', // Delivery
-                    'text', // Actions
-                ]}
+            <IndexTable
+                resourceName={resourceName}
+                itemCount={orders.length}
+                selectedItemsCount={
+                    selectedOrderIds.length === orders.length ? 'All' : selectedOrderIds.length
+                }
+                onSelectionChange={handleSelection}
                 headings={[
-                    <Checkbox
-                        label=""
-                        labelHidden
-                        checked={allSelected}
-                        indeterminate={someSelected}
-                        onChange={handleSelectAll}
-                    />,
-                    'Order',
-                    'Date',
-                    'Customer',
-                    'Total',
-                    'Payment',
-                    'Fulfillment',
-                    'Delivery',
-                    '',
+                    { title: 'Order', value: 'name' },
+                    { title: 'Date', value: 'createdAt' },
+                    { title: 'Customer', value: 'customer' },
+                    { title: 'Total', value: 'totalPrice', alignment: 'end' },
+                    { title: 'Payment' },
+                    { title: 'Fulfillment' },
+                    { title: 'Delivery' },
+                    { title: '' },
                 ]}
-                rows={rows}
-                sortable={[false, true, true, true, true, false, false, false, false]}
-                defaultSortDirection={sortConfig.direction === 'asc' ? 'ascending' : 'descending'}
-                initialSortColumnIndex={
-                    ['', 'name', 'createdAt', 'customer', 'totalPrice'].indexOf(sortConfig.column)
-                }
+                sortable={[true, true, true, true, false, false, false, false]}
+                sortDirection={sortConfig.direction === 'asc' ? 'ascending' : 'descending'}
+                sortColumnIndex={['name', 'createdAt', 'customer', 'totalPrice'].indexOf(sortConfig.column)}
                 onSort={handleSort}
-                hoverable
-                footerContent={
-                    orders.length > 0
-                        ? `Showing ${orders.length} order${orders.length !== 1 ? 's' : ''}`
-                        : undefined
-                }
-            />
+                loading={loading}
+                selectable
+            >
+                {rowMarkup}
+            </IndexTable>
         </Card>
     );
 }

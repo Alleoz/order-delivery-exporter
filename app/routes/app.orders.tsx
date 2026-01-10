@@ -298,8 +298,8 @@ export default function OrdersPage() {
     return (
         <Frame>
             <Page
-                title="Order Delivery Exporter"
-                subtitle="View and export order delivery data"
+                title="Orders"
+                subtitle="Manage and export your delivery data"
                 primaryAction={{
                     content: 'Export Selected',
                     icon: ExportIcon,
@@ -314,6 +314,7 @@ export default function OrdersPage() {
                         loading: isLoading,
                     },
                 ]}
+                fullWidth
             >
                 <BlockStack gap="400">
                     {/* Error Banner */}
@@ -323,137 +324,93 @@ export default function OrdersPage() {
                         </Banner>
                     )}
 
-                    {/* Dashboard Header / Stats */}
-                    <Card padding="0">
-                        <Box padding="400">
-                            <InlineStack gap="600" align="space-between" blockAlign="center">
-                                <InlineStack gap="600" align="start" blockAlign="center">
-                                    <Box>
-                                        <BlockStack gap="100">
-                                            <Text variant="bodySm" tone="subdued" as="p" fontWeight="medium">Total Orders</Text>
-                                            <InlineStack gap="100" blockAlign="center">
-                                                <Text variant="headingXl" as="p">{loaderData.totalCount.toLocaleString()}</Text>
-                                                {loaderData.totalCount > 0 && <Badge tone="info">+Live</Badge>}
-                                            </InlineStack>
-                                        </BlockStack>
-                                    </Box>
-
-                                    <div style={{ width: '1px', height: '40px', backgroundColor: 'var(--p-color-border-subdued)' }} />
-
-                                    <Box>
-                                        <BlockStack gap="100">
-                                            <Text variant="bodySm" tone="subdued" as="p" fontWeight="medium">Selected for Export</Text>
-                                            <Text variant="headingXl" as="p" tone={selectedOrderIds.length > 0 ? 'success' : undefined}>
-                                                {selectedOrderIds.length}
-                                            </Text>
-                                        </BlockStack>
-                                    </Box>
-                                </InlineStack>
-
-                                <Box padding="300" background="bg-surface-secondary" borderRadius="200">
-                                    <BlockStack gap="100" align="end">
-                                        <Text variant="bodySm" tone="subdued" as="span">
-                                            Last database sync
-                                        </Text>
-                                        <Text variant="bodyMd" fontWeight="semibold" as="span">
-                                            {formatLastSynced(loaderData.lastSynced)}
-                                        </Text>
-                                    </BlockStack>
-                                </Box>
-                            </InlineStack>
-                        </Box>
-                    </Card>
-
-                    {/* Filters */}
-                    <OrderFiltersComponent
-                        filters={filters}
-                        onFiltersChange={setFilters}
-                        onSearch={handleSearch}
-                        onReset={handleResetFilters}
-                        loading={isLoading}
-                    />
-
-                    {/* Selection Actions Banner */}
-                    {selectedOrderIds.length > 0 && (
-                        <Box
-                            background="bg-surface-brand-selected"
-                            padding="300"
-                            borderRadius="200"
-                            borderWidth="025"
-                            borderColor="border-brand"
-                        >
-                            <InlineStack gap="400" align="space-between" blockAlign="center">
-                                <InlineStack gap="300" blockAlign="center">
-                                    <Text variant="bodyMd" as="span" fontWeight="semibold">
-                                        {selectedOrderIds.length} order{selectedOrderIds.length !== 1 ? 's' : ''} selected
+                    {/* Stats Row */}
+                    <Box paddingBlockEnd="200">
+                        <InlineStack align="space-between" blockAlign="center">
+                            <BlockStack gap="050">
+                                <Text variant="headingLg" as="h2">Overview</Text>
+                                <InlineStack gap="200" blockAlign="center">
+                                    <Text variant="bodyMd" tone="subdued" as="span">
+                                        Total Orders:
                                     </Text>
-                                    <Button variant="plain" onClick={() => setSelectedOrderIds([])}>
-                                        Clear
-                                    </Button>
+                                    <Badge tone="info">{loaderData.totalCount.toLocaleString()}</Badge>
                                 </InlineStack>
+                            </BlockStack>
 
-                                <InlineStack gap="300">
-                                    <Button onClick={handleSelectAll}>
-                                        {selectedOrderIds.length === loaderData.orders.length ? 'Deselect All' : 'Select current page'}
-                                    </Button>
-                                    <Button variant="primary" icon={ExportIcon} onClick={() => setShowExportModal(true)}>
-                                        Export CSV / Excel
-                                    </Button>
-                                </InlineStack>
-                            </InlineStack>
-                        </Box>
-                    )}
-
-                    {/* Loading State */}
-                    {isLoading && (
-                        <Card>
-                            <InlineStack align="center" blockAlign="center" gap="300">
-                                <Spinner size="small" />
-                                <Text variant="bodyMd" as="p">Loading orders...</Text>
-                            </InlineStack>
-                        </Card>
-                    )}
-
-                    {/* Orders Table */}
-                    {!isLoading && loaderData.orders.length > 0 && (
-                        <OrderTable
-                            orders={loaderData.orders as Order[]}
-                            selectedOrderIds={selectedOrderIds}
-                            onSelectionChange={setSelectedOrderIds}
-                            onViewDetails={handleViewDetails}
-                            sortConfig={sortConfig}
-                            onSortChange={handleSortChange}
-                        />
-                    )}
-
-                    {/* Empty State */}
-                    {!isLoading && loaderData.orders.length === 0 && (
-                        <Card>
-                            <EmptyState
-                                heading="No orders found"
-                                image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
-                            >
-                                <p>Try adjusting your filters or check back later for new orders.</p>
-                            </EmptyState>
-                        </Card>
-                    )}
-
-                    {/* Pagination */}
-                    {(loaderData.pageInfo.hasNextPage || loaderData.pageInfo.hasPreviousPage) && (
-                        <InlineStack align="center">
-                            <Pagination
-                                hasPrevious={loaderData.pageInfo.hasPreviousPage}
-                                hasNext={loaderData.pageInfo.hasNextPage}
-                                onNext={handleNextPage}
-                                onPrevious={() => {
-                                    const params = new URLSearchParams(window.location.search);
-                                    params.delete('after');
-                                    params.delete('before');
-                                    submit(params, { method: 'get' });
-                                }}
-                            />
+                            <Text variant="bodySm" tone="subdued" as="span">
+                                Last synced: {formatLastSynced(loaderData.lastSynced)}
+                            </Text>
                         </InlineStack>
-                    )}
+                    </Box>
+
+                    {/* Main Content Card */}
+                    <Card padding="0">
+                        <BlockStack gap="0">
+                            {/* Filters Section - Integrated into Card */}
+                            <Box padding="400" borderBlockEndWidth="025" borderColor="border">
+                                <OrderFiltersComponent
+                                    filters={filters}
+                                    onFiltersChange={setFilters}
+                                    onSearch={handleSearch}
+                                    onReset={handleResetFilters}
+                                    loading={isLoading}
+                                />
+                            </Box>
+
+                            {/* Loading State */}
+                            {isLoading && (
+                                <Box padding="800">
+                                    <InlineStack align="center" blockAlign="center" gap="300">
+                                        <Spinner size="small" />
+                                        <Text variant="bodyMd" as="p" tone="subdued">Loading orders...</Text>
+                                    </InlineStack>
+                                </Box>
+                            )}
+
+                            {/* Orders Table */}
+                            {!isLoading && loaderData.orders.length > 0 && (
+                                <OrderTable
+                                    orders={loaderData.orders as Order[]}
+                                    selectedOrderIds={selectedOrderIds}
+                                    onSelectionChange={setSelectedOrderIds}
+                                    onViewDetails={handleViewDetails}
+                                    sortConfig={sortConfig}
+                                    onSortChange={handleSortChange}
+                                />
+                            )}
+
+                            {/* Empty State */}
+                            {!isLoading && loaderData.orders.length === 0 && (
+                                <Box padding="800">
+                                    <EmptyState
+                                        heading="No orders found"
+                                        image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
+                                    >
+                                        <p>Try adjusting your filters or check back later for new orders.</p>
+                                    </EmptyState>
+                                </Box>
+                            )}
+
+                            {/* Pagination */}
+                            {(loaderData.pageInfo.hasNextPage || loaderData.pageInfo.hasPreviousPage) && (
+                                <Box padding="400" borderBlockStartWidth="025" borderColor="border">
+                                    <InlineStack align="center">
+                                        <Pagination
+                                            hasPrevious={loaderData.pageInfo.hasPreviousPage}
+                                            hasNext={loaderData.pageInfo.hasNextPage}
+                                            onNext={handleNextPage}
+                                            onPrevious={() => {
+                                                const params = new URLSearchParams(window.location.search);
+                                                params.delete('after');
+                                                params.delete('before');
+                                                submit(params, { method: 'get' });
+                                            }}
+                                        />
+                                    </InlineStack>
+                                </Box>
+                            )}
+                        </BlockStack>
+                    </Card>
                 </BlockStack>
 
                 {/* Order Details Modal */}

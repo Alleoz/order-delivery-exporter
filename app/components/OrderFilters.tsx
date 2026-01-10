@@ -5,7 +5,6 @@
 
 import { useCallback, useState } from 'react';
 import {
-    Card,
     InlineStack,
     TextField,
     Button,
@@ -101,137 +100,135 @@ export function OrderFiltersComponent({
     const toggleDeliveryPopover = useCallback(() => setDeliveryPopoverActive((active) => !active), []);
 
     return (
-        <Card>
-            <BlockStack gap="400">
-                <InlineStack gap="400" align="start" blockAlign="end">
-                    <div style={{ flex: '1 1 300px' }}>
-                        <TextField
-                            label="Search"
-                            placeholder="Order #, customer name, email..."
-                            value={filters.query}
-                            onChange={handleQueryChange}
-                            prefix={<Icon source={SearchIcon} />}
-                            autoComplete="off"
-                            clearButton
-                            onClearButtonClick={() => handleQueryChange('')}
-                        />
-                    </div>
+        <BlockStack gap="400">
+            <InlineStack gap="400" align="start" blockAlign="end">
+                <div style={{ flex: '1 1 300px' }}>
+                    <TextField
+                        label="Search"
+                        placeholder="Order #, customer name, email..."
+                        value={filters.query}
+                        onChange={handleQueryChange}
+                        prefix={<Icon source={SearchIcon} />}
+                        autoComplete="off"
+                        clearButton
+                        onClearButtonClick={() => handleQueryChange('')}
+                    />
+                </div>
 
-                    <Box minWidth="150px">
-                        <Popover
-                            active={statusPopoverActive}
-                            activator={
-                                <Button onClick={toggleStatusPopover} disclosure>
-                                    Order Status {filters.status !== 'all' ? `(${filters.status.split(',').length})` : ''}
-                                </Button>
-                            }
-                            onClose={toggleStatusPopover}
-                            fullWidth
-                        >
-                            <Box padding="400">
-                                <ChoiceList
-                                    title="Order Status"
-                                    titleHidden
-                                    choices={statusOptions}
-                                    selected={filters.status === 'all' ? [] : filters.status.split(',')}
-                                    onChange={handleStatusChange}
-                                    allowMultiple
-                                />
-                            </Box>
-                        </Popover>
-                    </Box>
-
-                    <Box minWidth="150px">
-                        <Popover
-                            active={fulfillmentPopoverActive}
-                            activator={
-                                <Button onClick={toggleFulfillmentPopover} disclosure>
-                                    Fulfillment {filters.fulfillmentStatus !== 'all' ? `(${filters.fulfillmentStatus.split(',').length})` : ''}
-                                </Button>
-                            }
-                            onClose={toggleFulfillmentPopover}
-                            fullWidth
-                        >
-                            <Box padding="400">
-                                <ChoiceList
-                                    title="Fulfillment"
-                                    titleHidden
-                                    choices={fulfillmentOptions}
-                                    selected={filters.fulfillmentStatus === 'all' ? [] : filters.fulfillmentStatus.split(',')}
-                                    onChange={handleFulfillmentStatusChange}
-                                    allowMultiple
-                                />
-                            </Box>
-                        </Popover>
-                    </Box>
-
-                    <Box minWidth="150px">
-                        <Popover
-                            active={deliveryPopoverActive}
-                            activator={
-                                <Button onClick={toggleDeliveryPopover} disclosure>
-                                    Delivery {filters.deliveryStatus !== 'all' ? `(${filters.deliveryStatus.split(',').length})` : ''}
-                                </Button>
-                            }
-                            onClose={toggleDeliveryPopover}
-                            fullWidth
-                        >
-                            <Box padding="400">
-                                <ChoiceList
-                                    title="Delivery Status"
-                                    titleHidden
-                                    choices={deliveryOptions}
-                                    selected={filters.deliveryStatus === 'all' ? [] : filters.deliveryStatus.split(',')}
-                                    onChange={handleDeliveryStatusChange}
-                                    allowMultiple
-                                />
-                            </Box>
-                        </Popover>
-                    </Box>
-                </InlineStack>
-
-                <InlineStack gap="400" align="start" blockAlign="end">
-                    <div style={{ flex: '1 1 150px' }}>
-                        <TextField
-                            label="Date From"
-                            type="date"
-                            value={filters.dateFrom}
-                            onChange={handleDateFromChange}
-                            autoComplete="off"
-                        />
-                    </div>
-
-                    <div style={{ flex: '1 1 150px' }}>
-                        <TextField
-                            label="Date To"
-                            type="date"
-                            value={filters.dateTo}
-                            onChange={handleDateToChange}
-                            autoComplete="off"
-                        />
-                    </div>
-
-                    <InlineStack gap="200" align="end">
-                        <Button
-                            variant="primary"
-                            onClick={onSearch}
-                            loading={loading}
-                        >
-                            Apply Filters
-                        </Button>
-
-                        {hasActiveFilters && (
-                            <Button
-                                variant="plain"
-                                onClick={onReset}
-                                disabled={loading}
-                            >
-                                Reset
+                <Box minWidth="150px">
+                    <Popover
+                        active={statusPopoverActive}
+                        activator={
+                            <Button onClick={toggleStatusPopover} disclosure>
+                                Order Status {filters.status !== 'all' ? `(${filters.status.split(',').length})` : ''}
                             </Button>
-                        )}
-                    </InlineStack>
+                        }
+                        onClose={toggleStatusPopover}
+                        fullWidth
+                    >
+                        <Box padding="400">
+                            <ChoiceList
+                                title="Order Status"
+                                titleHidden
+                                choices={statusOptions}
+                                selected={filters.status === 'all' ? [] : filters.status.split(',')}
+                                onChange={handleStatusChange}
+                                allowMultiple
+                            />
+                        </Box>
+                    </Popover>
+                </Box>
+
+                <Box minWidth="150px">
+                    <Popover
+                        active={fulfillmentPopoverActive}
+                        activator={
+                            <Button onClick={toggleFulfillmentPopover} disclosure>
+                                Fulfillment {filters.fulfillmentStatus !== 'all' ? `(${filters.fulfillmentStatus.split(',').length})` : ''}
+                            </Button>
+                        }
+                        onClose={toggleFulfillmentPopover}
+                        fullWidth
+                    >
+                        <Box padding="400">
+                            <ChoiceList
+                                title="Fulfillment"
+                                titleHidden
+                                choices={fulfillmentOptions}
+                                selected={filters.fulfillmentStatus === 'all' ? [] : filters.fulfillmentStatus.split(',')}
+                                onChange={handleFulfillmentStatusChange}
+                                allowMultiple
+                            />
+                        </Box>
+                    </Popover>
+                </Box>
+
+                <Box minWidth="150px">
+                    <Popover
+                        active={deliveryPopoverActive}
+                        activator={
+                            <Button onClick={toggleDeliveryPopover} disclosure>
+                                Delivery {filters.deliveryStatus !== 'all' ? `(${filters.deliveryStatus.split(',').length})` : ''}
+                            </Button>
+                        }
+                        onClose={toggleDeliveryPopover}
+                        fullWidth
+                    >
+                        <Box padding="400">
+                            <ChoiceList
+                                title="Delivery Status"
+                                titleHidden
+                                choices={deliveryOptions}
+                                selected={filters.deliveryStatus === 'all' ? [] : filters.deliveryStatus.split(',')}
+                                onChange={handleDeliveryStatusChange}
+                                allowMultiple
+                            />
+                        </Box>
+                    </Popover>
+                </Box>
+            </InlineStack>
+
+            <InlineStack gap="400" align="start" blockAlign="end">
+                <div style={{ flex: '1 1 150px' }}>
+                    <TextField
+                        label="Date From"
+                        type="date"
+                        value={filters.dateFrom}
+                        onChange={handleDateFromChange}
+                        autoComplete="off"
+                    />
+                </div>
+
+                <div style={{ flex: '1 1 150px' }}>
+                    <TextField
+                        label="Date To"
+                        type="date"
+                        value={filters.dateTo}
+                        onChange={handleDateToChange}
+                        autoComplete="off"
+                    />
+                </div>
+
+                <InlineStack gap="200" align="end">
+                    <Button
+                        variant="primary"
+                        onClick={onSearch}
+                        loading={loading}
+                    >
+                        Apply Filters
+                    </Button>
+
+                    {hasActiveFilters && (
+                        <Button
+                            variant="plain"
+                            onClick={onReset}
+                            disabled={loading}
+                        >
+                            Reset
+                        </Button>
+                    )}
                 </InlineStack>
-            </BlockStack>
-        </Card>
+            </InlineStack>
+        </BlockStack>
     );
 }
