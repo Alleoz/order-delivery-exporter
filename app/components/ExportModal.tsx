@@ -20,6 +20,7 @@ interface ExportModalProps {
     open: boolean;
     onClose: () => void;
     selectedCount: number;
+    totalMatches: number;
     onExport: (options: ExportOptions) => void;
     exporting: boolean;
     exportProgress?: number;
@@ -30,12 +31,14 @@ export interface ExportOptions {
     includeLineItems: boolean;
     includeFulfillments: boolean;
     includeAddresses: boolean;
+    exportMode: 'selected' | 'all';
 }
 
 export function ExportModal({
     open,
     onClose,
     selectedCount,
+    totalMatches,
     onExport,
     exporting,
     exportProgress,
@@ -44,6 +47,13 @@ export function ExportModal({
     const [includeLineItems, setIncludeLineItems] = useState(true);
     const [includeFulfillments, setIncludeFulfillments] = useState(true);
     const [includeAddresses, setIncludeAddresses] = useState(true);
+    const [exportMode, setExportMode] = useState<'selected' | 'all'>(selectedCount > 0 ? 'selected' : 'all');
+
+    // Update export mode when modal opens or counts change
+    // If no orders selected, force 'all'
+    if (selectedCount === 0 && exportMode === 'selected') {
+        setExportMode('all');
+    }
 
     const handleExport = useCallback(() => {
         onExport({
@@ -51,8 +61,9 @@ export function ExportModal({
             includeLineItems,
             includeFulfillments,
             includeAddresses,
+            exportMode,
         });
-    }, [format, includeLineItems, includeFulfillments, includeAddresses, onExport]);
+    }, [format, includeLineItems, includeFulfillments, includeAddresses, exportMode, onExport]);
 
     return (
         <Modal
@@ -63,7 +74,7 @@ export function ExportModal({
                 content: exporting ? 'Exporting...' : 'Export',
                 onAction: handleExport,
                 loading: exporting,
-                disabled: selectedCount === 0,
+                disabled: exportMode === 'selected' && selectedCount === 0,
             }}
             secondaryActions={[
                 {
@@ -75,15 +86,27 @@ export function ExportModal({
         >
             <Modal.Section>
                 <BlockStack gap="500">
-                    {selectedCount === 0 ? (
-                        <Banner tone="warning">
-                            <p>No orders selected. Please select at least one order to export.</p>
-                        </Banner>
-                    ) : (
-                        <Banner tone="info">
-                            <p>{selectedCount} order{selectedCount !== 1 ? 's' : ''} will be exported.</p>
-                        </Banner>
-                    )}
+                    {/* Scope Selection */}
+                    <BlockStack gap="300">
+                        <Text variant="headingMd" as="h3">Orders to Export</Text>
+                        <BlockStack gap="200">
+                            <RadioButton
+                                label={`Selected orders (${selectedCount})`}
+                                checked={exportMode === 'selected'}
+                                id="scope-selected"
+                                name="exportScope"
+                                onChange={() => setExportMode('selected')}
+                                disabled={selectedCount === 0}
+                            />
+                            <RadioButton
+                                label={`All orders matching search (${totalMatches})`}
+                                checked={exportMode === 'all'}
+                                id="scope-all"
+                                name="exportScope"
+                                onChange={() => setExportMode('all')}
+                            />
+                        </BlockStack>
+                    </BlockStack>
 
                     {/* Format Selection */}
                     <BlockStack gap="300">

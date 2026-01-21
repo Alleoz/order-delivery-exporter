@@ -257,3 +257,71 @@ export async function fetchOrdersByIds(request: Request, orderIds: string[]): Pr
 
     return orders;
 }
+
+/**
+ * Fetch ALL orders matching the filters, handling pagination automatically
+ */
+export async function fetchAllOrders(params: FetchOrdersParams): Promise<Order[]> {
+    const { admin } = await authenticate.admin(params.request);
+    const allOrders: Order[] = [];
+    let hasNextPage = true;
+    let endCursor: string | null = null;
+
+    const queryString = buildOrderQueryString({
+        orderId: params.orderId,
+        dateFrom: params.dateFrom,
+        dateTo: params.dateTo,
+        fulfillmentStatus: params.fulfillmentStatus,
+        financialStatus: params.financialStatus,
+        deliveryStatus: params.deliveryStatus,
+        status: params.status,
+    });
+
+    const sortKeyMap: Record<string, string> = {
+        name: 'ORDER_NUMBER',
+        createdAt: 'CREATED_AT',
+        updatedAt: 'UPDATED_AT',
+        totalPrice: 'TOTAL_PRICE',
+        customer: 'CUSTOMER_NAME',
+    };
+
+    console.log('Starting bulk fetch with query:', queryString);
+
+    while (hasNextPage) {
+        const response = await admin.graphql(ORDERS_QUERY, {
+            variables: {
+                first: 50, // Max per page
+                after: endCursor,
+                query: queryString || null,
+                sortKey: sortKeyMap[params.sortKey || 'createdAt'] || 'CREATED_AT',
+                reverse: params.reverse ?? true,
+            },
+        });
+
+        const data: any = await response.json();
+
+        if (data.errors) {
+            console.error('GraphQL Errors during bulk fetch:', data.errors);
+            throw new Error(`Failed to fetch orders: ${data.errors.map((e: any) => e.message).join(', ')}`);
+        }
+
+        const edges = data.data.orders.edges;
+        const pageInfo = data.data.orders.pageInfo;
+
+        const pageOrders = edges.map((edge: any) => transformOrder(edge.node));
+        allOrders.push(...pageOrders);
+
+        hasNextPage = pageInfo.hasNextPage;
+        endCursor = pageInfo.endCursor;
+
+        // Safety break for extremely large exports to prevent timeout/memory issues
+        // In a real app, this should be a background job
+        if (allOrders.length > 2000) {
+            console.warn('Export limit reached (2000 orders). Stopping fetch.');
+            break;
+        }
+    }
+
+    console.log(`Fetched total ${allOrders.length} orders`);
+    return allOrders;
+}

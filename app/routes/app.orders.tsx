@@ -27,7 +27,7 @@ import {
 import { ExportIcon, RefreshIcon } from '@shopify/polaris-icons';
 
 import { authenticate } from '~/shopify.server';
-import { fetchOrders } from '~/lib/shopify.server';
+import { fetchOrders, fetchAllOrders } from '~/lib/shopify.server';
 import { generateExcelFile, getExportFilename, getContentType } from '~/utils/export.server';
 import { OrderTable } from '~/components/OrderTable';
 import { OrderFiltersComponent } from '~/components/OrderFilters';
@@ -103,8 +103,24 @@ export async function action({ request }: ActionFunctionArgs) {
         const includeAddresses = formData.get('includeAddresses') === 'true';
 
         try {
-            // We need to fetch these orders - for now we'll pass them from client
-            const ordersData = JSON.parse(formData.get('ordersData') as string || '[]');
+            let ordersData: Order[] = [];
+            const exportMode = formData.get('exportMode') as 'selected' | 'all' || 'selected';
+
+            if (exportMode === 'all') {
+                // Fetch all orders based on filters
+                ordersData = await fetchAllOrders({
+                    request,
+                    orderId: formData.get('query') as string || undefined,
+                    status: formData.get('status') as string !== 'all' ? formData.get('status') as string : undefined,
+                    fulfillmentStatus: formData.get('fulfillmentStatus') as string !== 'all' ? formData.get('fulfillmentStatus') as string : undefined,
+                    deliveryStatus: formData.get('deliveryStatus') as string !== 'all' ? formData.get('deliveryStatus') as string : undefined,
+                    dateFrom: formData.get('dateFrom') as string || undefined,
+                    dateTo: formData.get('dateTo') as string || undefined,
+                });
+            } else {
+                // We need to fetch these orders - for now we'll pass them from client
+                ordersData = JSON.parse(formData.get('ordersData') as string || '[]');
+            }
 
             const buffer = generateExcelFile(ordersData, {
                 format,
@@ -263,12 +279,24 @@ export default function OrdersPage() {
 
         const formData = new FormData();
         formData.set('action', 'export');
-        formData.set('orderIds', JSON.stringify(selectedOrderIds));
-        formData.set('ordersData', JSON.stringify(selectedOrders));
+        formData.set('exportMode', options.exportMode);
         formData.set('format', options.format);
         formData.set('includeLineItems', String(options.includeLineItems));
         formData.set('includeFulfillments', String(options.includeFulfillments));
         formData.set('includeAddresses', String(options.includeAddresses));
+
+        if (options.exportMode === 'selected') {
+            formData.set('orderIds', JSON.stringify(selectedOrderIds));
+            formData.set('ordersData', JSON.stringify(selectedOrders));
+        } else {
+            // Pass current filters for "Export All"
+            if (filters.query) formData.set('query', filters.query);
+            if (filters.status) formData.set('status', filters.status);
+            if (filters.fulfillmentStatus) formData.set('fulfillmentStatus', filters.fulfillmentStatus);
+            if (filters.deliveryStatus) formData.set('deliveryStatus', filters.deliveryStatus);
+            if (filters.dateFrom) formData.set('dateFrom', filters.dateFrom);
+            if (filters.dateTo) formData.set('dateTo', filters.dateTo);
+        }
 
         // Use submit from Remix which maintains the authentication context
         submit(formData, { method: 'post' });
@@ -303,7 +331,7 @@ export default function OrdersPage() {
                 primaryAction={{
                     content: 'Export Selected',
                     icon: ExportIcon,
-                    disabled: selectedOrderIds.length === 0,
+                    disabled: loaderData.totalCount === 0,
                     onAction: () => setShowExportModal(true),
                 }}
                 secondaryActions={[
@@ -425,6 +453,7 @@ export default function OrdersPage() {
                     open={showExportModal}
                     onClose={() => setShowExportModal(false)}
                     selectedCount={selectedOrderIds.length}
+                    totalMatches={loaderData.totalCount}
                     onExport={handleExport}
                     exporting={false}
                 />
