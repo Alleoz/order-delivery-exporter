@@ -4,7 +4,7 @@
  */
 
 import * as XLSX from 'xlsx';
-import type { Order } from '~/lib/types';
+import type { Order, Fulfillment } from '~/lib/types';
 
 export interface ExportOptions {
     format: 'xlsx' | 'csv';
@@ -79,6 +79,33 @@ function getTrackingInfo(order: Order): { carriers: string; trackingNumbers: str
         trackingNumbers: [...new Set(trackingNumbers)].join(', '),
         trackingUrls: [...new Set(trackingUrls)].join('\n'),
     };
+}
+
+/**
+ * Get latest tracking update string
+ */
+function getLatestTrackingUpdate(order: Order): string {
+    const updates: string[] = [];
+
+    for (const fulfillment of order.fulfillments) {
+        if (fulfillment.events?.nodes && fulfillment.events.nodes.length > 0) {
+            const event = fulfillment.events.nodes[0];
+            const locationParts = [event.city, event.province, event.country, event.zip].filter(Boolean);
+            const location = locationParts.length > 0 ? locationParts.join(', ') : '';
+
+            // Format: "YYYY-MM-DD HH:mm Location, Status, Message"
+            const parts = [
+                formatDate(event.happenedAt),
+                location,
+                event.status.replace(/_/g, ' '),
+                event.message
+            ].filter(Boolean);
+
+            updates.push(parts.join(', '));
+        }
+    }
+
+    return updates.join('\n');
 }
 
 /**
@@ -160,6 +187,7 @@ function transformOrdersToRows(orders: Order[], options: ExportOptions): any[] {
             baseRow['Tracking URLs'] = tracking.trackingUrls;
             baseRow['Delivered At'] = delivery.deliveredAt;
             baseRow['Estimated Delivery'] = delivery.estimatedDelivery;
+            baseRow['Latest Tracking Info'] = getLatestTrackingUpdate(order);
         }
 
         // Line items

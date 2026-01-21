@@ -131,6 +131,17 @@ export const ORDERS_QUERY = `
               number
               url
             }
+            events(first: 1, reverse: true) {
+              nodes {
+                happenedAt
+                city
+                province
+                country
+                zip
+                status
+                message
+              }
+            }
           }
         }
       }
@@ -243,6 +254,17 @@ export const ORDER_BY_ID_QUERY = `
           company
           number
           url
+        }
+        events(first: 1, reverse: true) {
+          nodes {
+            happenedAt
+            city
+            province
+            country
+            zip
+            status
+            message
+          }
         }
       }
     }

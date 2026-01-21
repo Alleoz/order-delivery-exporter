@@ -45,6 +45,16 @@ export interface TrackingInfo {
 }
 
 // Fulfillment types
+export interface FulfillmentEvent {
+    happenedAt: string;
+    city?: string;
+    province?: string;
+    country?: string;
+    zip?: string;
+    status: string;
+    message?: string;
+}
+
 export interface Fulfillment {
     id: string;
     status: string;
@@ -52,8 +62,15 @@ export interface Fulfillment {
     createdAt: string;
     deliveredAt: string | null;
     estimatedDeliveryAt: string | null;
-    inTransitAt: string | null;
-    trackingInfo: TrackingInfo[];
+    inTransitAt?: string | null;
+    trackingInfo: {
+        company: string;
+        number: string;
+        url: string;
+    }[];
+    events?: {
+        nodes: FulfillmentEvent[];
+    };
     fulfillmentLineItems: {
         nodes: Array<{
             id: string;
