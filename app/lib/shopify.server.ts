@@ -124,6 +124,17 @@ function transformOrder(rawOrder: any): Order {
             fulfillmentLineItems: {
                 nodes: fulfillment.fulfillmentLineItems?.nodes || [],
             },
+            events: {
+                nodes: (fulfillment.events?.nodes || []).map((event: any) => ({
+                    happenedAt: event.happenedAt,
+                    city: event.city,
+                    province: event.province,
+                    country: event.country,
+                    zip: event.zip,
+                    status: event.status,
+                    message: event.message,
+                })),
+            },
         })),
     };
 }
