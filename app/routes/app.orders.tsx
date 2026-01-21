@@ -271,7 +271,7 @@ export default function OrdersPage() {
     const handleExport = useCallback((options: ExportOptions) => {
         const selectedOrders = loaderData.orders.filter((o) => o && selectedOrderIds.includes(o.id));
 
-        if (selectedOrders.length === 0) {
+        if (options.exportMode === 'selected' && selectedOrders.length === 0) {
             setToastMessage('Please select at least one order to export');
             setToastError(true);
             return;
