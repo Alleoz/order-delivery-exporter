@@ -15,6 +15,7 @@ const shopify = shopifyApp({
     "read_customers",
     "read_fulfillments",
     "read_orders",
+    "read_all_orders",
     "read_shipping",
   ],
   appUrl: process.env.SHOPIFY_APP_URL || ("https://" + process.env.VERCEL_URL),
