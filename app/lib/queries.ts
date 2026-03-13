@@ -364,6 +364,11 @@ export function buildOrderQueryString(filters: {
     } else {
       queryParts.push(`status:${filters.status}`);
     }
+  } else {
+    // IMPORTANT: Shopify defaults to only returning "open" orders.
+    // We must explicitly include "status:any" to also return closed/archived orders,
+    // otherwise older orders won't appear in search results even if the count matches.
+    queryParts.push('status:any');
   }
 
   return queryParts.join(' AND ');
