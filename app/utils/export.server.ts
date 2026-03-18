@@ -5,6 +5,7 @@
 
 import * as XLSX from 'xlsx';
 import type { Order, Fulfillment } from '~/lib/types';
+import { detectCarrier } from '~/utils/carrier-detection';
 
 export interface ExportOptions {
     format: 'xlsx' | 'csv';
@@ -59,7 +60,7 @@ function formatAddress(address: Order['shippingAddress']): string {
 }
 
 /**
- * Get tracking info summary
+ * Get tracking info summary — enhanced with carrier detection
  */
 function getTrackingInfo(order: Order): { carriers: string; trackingNumbers: string; trackingUrls: string } {
     const carriers: string[] = [];
@@ -68,9 +69,25 @@ function getTrackingInfo(order: Order): { carriers: string; trackingNumbers: str
 
     for (const fulfillment of order.fulfillments) {
         for (const tracking of fulfillment.trackingInfo) {
-            if (tracking.company) carriers.push(tracking.company);
             if (tracking.number) trackingNumbers.push(tracking.number);
-            if (tracking.url) trackingUrls.push(tracking.url);
+
+            if (tracking.company) {
+                carriers.push(tracking.company);
+            } else if (tracking.number) {
+                // Detect carrier from tracking number if Shopify doesn't provide it
+                const detected = detectCarrier(tracking.number);
+                if (detected.carrier !== 'Unknown Carrier') {
+                    carriers.push(detected.carrier);
+                }
+            }
+
+            if (tracking.url) {
+                trackingUrls.push(tracking.url);
+            } else if (tracking.number) {
+                // Generate tracking URL from carrier detection
+                const detected = detectCarrier(tracking.number);
+                trackingUrls.push(detected.trackingUrl);
+            }
         }
     }
 

@@ -13,6 +13,7 @@ import {
 } from '@shopify/polaris';
 import type { Order, SortConfig } from '~/lib/types';
 import { ViewIcon } from '@shopify/polaris-icons';
+import { detectCarrier } from '~/utils/carrier-detection';
 
 interface OrderTableProps {
     orders: Order[];
@@ -138,22 +139,34 @@ function getDeliveryBadge(order: Order) {
 }
 
 /**
- * Get tracking info from order
+ * Get tracking info from order — enhanced with carrier detection
  */
 function getTrackingInfo(order: Order): { carrier: string; trackingNumber: string; trackingUrl: string | null } | null {
     for (const fulfillment of order.fulfillments || []) {
         for (const tracking of fulfillment.trackingInfo || []) {
             if (tracking.number) {
+                // If Shopify provides a URL, use it directly
+                if (tracking.url) {
+                    return {
+                        carrier: tracking.company || 'Carrier',
+                        trackingNumber: tracking.number,
+                        trackingUrl: tracking.url,
+                    };
+                }
+
+                // Otherwise, detect the carrier and generate a tracking URL
+                const detected = detectCarrier(tracking.number);
                 return {
-                    carrier: tracking.company || 'Carrier',
+                    carrier: tracking.company || detected.carrier,
                     trackingNumber: tracking.number,
-                    trackingUrl: tracking.url,
+                    trackingUrl: detected.trackingUrl,
                 };
             }
         }
     }
     return null;
 }
+
 
 export function OrderTable({
     orders,
