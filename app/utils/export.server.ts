@@ -196,10 +196,11 @@ function getTrackingNumbersForExternalLookup(order: Order): Array<{
                 // Check if this is a non-native carrier that needs external lookup
                 const isNative = isShopifyNativeCarrier(tracking.number, tracking.company || undefined);
                 const hasShopifyEvents = fulfillment.events?.nodes && fulfillment.events.nodes.length > 0;
-                const hasDeliveryDate = !!fulfillment.deliveredAt;
 
-                // Only look up externally if Shopify doesn't already have good data
-                if (!isNative && !hasShopifyEvents && !hasDeliveryDate) {
+                // Look up ALL non-native carriers externally, even if Shopify has
+                // a delivery date. This ensures we get actual tracking event details
+                // from 17track for the "Latest Tracking Info" column.
+                if (!isNative && !hasShopifyEvents) {
                     items.push({
                         number: tracking.number,
                         carrier: tracking.company,
@@ -266,17 +267,19 @@ function buildEnhancedTrackingInfo(order: Order, externalData: Map<string, Exter
     let estimatedDelivery = shopifyDelivery.estimatedDelivery;
     let deliveryStatus = shopifyDelivery.status;
 
-    // If Shopify data is empty, try to supplement with external data
+    // Enrich with external tracking data (17track API)
     for (const fulfillment of order.fulfillments) {
         for (const tracking of fulfillment.trackingInfo) {
-            if (tracking.number && externalData.has(tracking.number)) {
+            if (!tracking.number) continue;
+
+            if (externalData.has(tracking.number)) {
                 const ext = externalData.get(tracking.number)!;
 
-                // Supplement delivery date — use actual timestamp from 17track
+                // === DELIVERY DATE ===
+                // Always prefer the most specific delivery date available
                 if (!deliveredAt && ext.deliveredAt) {
                     deliveredAt = formatDate(ext.deliveredAt);
                 } else if (!deliveredAt && ext.status === 'delivered' && ext.events.length > 0) {
-                    // If deliveredAt not set but status is delivered, use latest event
                     deliveredAt = formatDate(ext.events[0].timestamp);
                 }
 
@@ -284,14 +287,21 @@ function buildEnhancedTrackingInfo(order: Order, externalData: Map<string, Exter
                     estimatedDelivery = ext.estimatedDelivery;
                 }
 
-                // Build tracking info text from external data
+                // === DELIVERY STATUS ===
+                // Update delivery status from external data (more accurate for non-native carriers)
+                if (ext.source === '17track' && ext.status !== 'unknown') {
+                    deliveryStatus = ext.statusLabel;
+                }
+
+                // === LATEST TRACKING INFO ===
+                // Build the tracking info text from 17track data
                 if (!latestTrackingInfo && ext.source === '17track') {
                     const infoParts: string[] = [];
 
-                    // Status first
+                    // Status is always first
                     infoParts.push(ext.statusLabel);
 
-                    // Latest event details
+                    // Add latest event details if available
                     if (ext.events.length > 0) {
                         const lastEvent = ext.events[0];
                         if (lastEvent.description) {
@@ -303,26 +313,53 @@ function buildEnhancedTrackingInfo(order: Order, externalData: Map<string, Exter
                         if (lastEvent.timestamp) {
                             infoParts.push(formatDate(lastEvent.timestamp));
                         }
+                    } else if (ext.status === 'delivered' && deliveredAt) {
+                        // No detailed events, but we know it's delivered
+                        infoParts.push(deliveredAt);
                     }
 
                     latestTrackingInfo = infoParts.join(' | ');
-                } else if (!latestTrackingInfo) {
-                    // No 17track data — provide tracking links for manual lookup
-                    const urls = ext.universalTrackingUrls;
-                    if (urls.length > 0) {
-                        latestTrackingInfo = urls.map(u => `${u.name}: ${u.url}`).join(' | ');
-                    }
-                }
-
-                // Update delivery status from external if Shopify has none
-                if (deliveryStatus === 'Unfulfilled' || deliveryStatus === 'FULFILLED') {
-                    deliveryStatus = ext.statusLabel;
                 }
             }
         }
     }
 
-    // If we still have no tracking info, provide helpful tracking links
+    // === FALLBACK: Use Shopify delivery status + date if available ===
+    // If we STILL have no tracking info text, but we know the delivery status,
+    // show the status + delivery date instead of just tracking links.
+    if (!latestTrackingInfo) {
+        // Check if Shopify knows the order is delivered
+        const isDelivered = deliveryStatus?.toUpperCase().includes('DELIVERED');
+        const isFulfilled = deliveryStatus?.toUpperCase().includes('FULFILLED');
+
+        if (isDelivered && deliveredAt) {
+            latestTrackingInfo = `DELIVERED | ${deliveredAt}`;
+        } else if (isDelivered) {
+            latestTrackingInfo = 'DELIVERED';
+        } else if (isFulfilled) {
+            // Fulfilled but no detailed tracking — check fulfillment displayStatus
+            for (const fulfillment of order.fulfillments) {
+                if (fulfillment.displayStatus === 'DELIVERED') {
+                    latestTrackingInfo = `DELIVERED${fulfillment.deliveredAt ? ' | ' + formatDate(fulfillment.deliveredAt) : ''}`;
+                    if (!deliveredAt && fulfillment.deliveredAt) {
+                        deliveredAt = formatDate(fulfillment.deliveredAt);
+                    }
+                    deliveryStatus = 'Delivered';
+                    break;
+                } else if (fulfillment.displayStatus === 'IN_TRANSIT') {
+                    latestTrackingInfo = 'In Transit';
+                    deliveryStatus = 'In Transit';
+                    break;
+                } else if (fulfillment.displayStatus) {
+                    latestTrackingInfo = fulfillment.displayStatus.replace(/_/g, ' ');
+                    break;
+                }
+            }
+        }
+    }
+
+    // === LAST RESORT: Show tracking links ===
+    // Only if we truly have NO status info at all
     if (!latestTrackingInfo) {
         const trackingLinks: string[] = [];
         for (const fulfillment of order.fulfillments) {
