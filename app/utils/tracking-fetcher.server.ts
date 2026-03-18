@@ -3,12 +3,15 @@
  * Server-side service to fetch delivery details from 17track's official API
  * for carriers that Shopify doesn't natively track.
  *
- * SETUP REQUIRED:
- * 1. Sign up for a free 17track API account at https://api.17track.net
- * 2. Get your API key from the dashboard
- * 3. Add TRACKING_API_KEY=your_key to your .env file
+ * IMPORTANT: 17track QUOTA EXPLAINED
+ * - Quota is ONLY consumed when you REGISTER a new tracking number
+ * - Once registered, gettrackinfo calls are FREE and unlimited
+ * - Free tier: 200 registrations (one-time)
+ * - We track which numbers have been registered to avoid re-registering
  *
- * Free tier: 200 tracking numbers for new accounts.
+ * SETUP:
+ * 1. Sign up at https://api.17track.net
+ * 2. Add TRACKING_API_KEY=your_key to .env
  */
 
 import { detectCarrier, isShopifyNativeCarrier, getUniversalTrackingUrls } from './carrier-detection';
@@ -35,6 +38,39 @@ export interface ExternalTrackingResult {
     source: 'shopify' | '17track' | 'detection_only';
 }
 
+// =====================================================================
+// IN-MEMORY CACHE
+// Tracks which numbers have been registered with 17track to avoid
+// wasting quota on re-registration. Also caches tracking results
+// to speed up repeated exports.
+// =====================================================================
+
+/** Set of tracking numbers already registered with 17track */
+const registeredNumbers = new Set<string>();
+
+/** Cache of tracking results (key: tracking number). Cleared after 30 min. */
+const trackingCache = new Map<string, { result: ExternalTrackingResult; cachedAt: number }>();
+const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+function getCachedResult(trackingNumber: string): ExternalTrackingResult | null {
+    const entry = trackingCache.get(trackingNumber);
+    if (entry && Date.now() - entry.cachedAt < CACHE_TTL_MS) {
+        return entry.result;
+    }
+    if (entry) {
+        trackingCache.delete(trackingNumber); // expired
+    }
+    return null;
+}
+
+function setCachedResult(trackingNumber: string, result: ExternalTrackingResult): void {
+    trackingCache.set(trackingNumber, { result, cachedAt: Date.now() });
+}
+
+// =====================================================================
+// STATUS NORMALIZATION
+// =====================================================================
+
 /**
  * Normalize status strings from 17track API v2.2.
  * The API returns status as a string like "Delivered", "InTransit", etc.
@@ -51,9 +87,6 @@ function normalize17TrackStatus(statusStr: string): ExternalTrackingResult['stat
     return 'unknown';
 }
 
-/**
- * Get a human-readable label for the normalized status.
- */
 function getStatusLabel(status: ExternalTrackingResult['status']): string {
     const labels: Record<ExternalTrackingResult['status'], string> = {
         delivered: 'Delivered',
@@ -66,13 +99,28 @@ function getStatusLabel(status: ExternalTrackingResult['status']): string {
     return labels[status] || 'Unknown';
 }
 
+// =====================================================================
+// 17TRACK API CALLS
+// =====================================================================
+
 /**
- * Register tracking numbers with 17track (required before getting info).
- * Must be called first — 17track needs to register and start tracking.
+ * Register tracking numbers with 17track.
+ * ONLY registers numbers NOT already in our registeredNumbers set.
+ * Returns the count of newly registered numbers (quota consumed).
  */
-async function register17Track(trackingNumbers: string[], apiKey: string): Promise<boolean> {
+async function register17Track(trackingNumbers: string[], apiKey: string): Promise<number> {
+    // Filter out already-registered numbers to save quota
+    const newNumbers = trackingNumbers.filter(n => !registeredNumbers.has(n));
+
+    if (newNumbers.length === 0) {
+        console.log('[TrackingFetcher] All numbers already registered, skipping registration (0 quota used)');
+        return 0;
+    }
+
+    console.log(`[TrackingFetcher] Registering ${newNumbers.length} NEW numbers (${trackingNumbers.length - newNumbers.length} already registered, saving quota)`);
+
     try {
-        const body = trackingNumbers.map(num => ({
+        const body = newNumbers.map(num => ({
             number: num,
             carrier: 0, // auto-detect
         }));
@@ -84,25 +132,44 @@ async function register17Track(trackingNumbers: string[], apiKey: string): Promi
                 '17token': apiKey,
             },
             body: JSON.stringify(body),
-            signal: AbortSignal.timeout(10000),
+            signal: AbortSignal.timeout(15000),
         });
 
         if (!response.ok) {
             console.log(`[TrackingFetcher] 17track register returned: ${response.status}`);
-            return false;
+            return 0;
         }
 
         const data = await response.json();
-        console.log(`[TrackingFetcher] 17track register result:`, JSON.stringify(data));
-        return true;
+        let newlyRegistered = 0;
+
+        // Mark accepted numbers as registered
+        if (data?.data?.accepted) {
+            for (const item of data.data.accepted) {
+                registeredNumbers.add(item.number);
+                newlyRegistered++;
+            }
+        }
+
+        // Numbers rejected with "already exists" error are ALSO registered
+        // (they were registered in a previous session before server restart)
+        if (data?.data?.rejected) {
+            for (const item of data.data.rejected) {
+                // Error code -18019901 means "number already registered"
+                registeredNumbers.add(item.number);
+            }
+        }
+
+        console.log(`[TrackingFetcher] Registered ${newlyRegistered} new numbers. Total known registered: ${registeredNumbers.size}`);
+        return newlyRegistered;
     } catch (error: any) {
         console.log(`[TrackingFetcher] 17track register failed: ${error.message}`);
-        return false;
+        return 0;
     }
 }
 
 /**
- * Parse a single 17track API track_info response into our internal format.
+ * Parse a single 17track API track_info response.
  */
 interface Parsed17TrackData {
     status: string;
@@ -114,13 +181,11 @@ interface Parsed17TrackData {
 }
 
 function parse17TrackInfo(trackInfo: any): Parsed17TrackData {
-    // Extract status — it's a string like "Delivered", "InTransit"
     const latestStatusStr = trackInfo.latest_status?.status || '';
     const latestEvent = trackInfo.latest_event;
     const providers = trackInfo.tracking?.providers || [];
     const events: ExternalTrackingEvent[] = [];
 
-    // Parse events from providers
     for (const provider of providers) {
         if (provider.events && Array.isArray(provider.events)) {
             for (const evt of provider.events) {
@@ -134,11 +199,9 @@ function parse17TrackInfo(trackInfo: any): Parsed17TrackData {
         }
     }
 
-    // Get delivered date — if status is "Delivered", use the latest event time
     let deliveredAt: string | undefined;
     const normalizedStatus = normalize17TrackStatus(latestStatusStr);
     if (normalizedStatus === 'delivered') {
-        // Use latest event time as delivery date
         if (latestEvent?.time_iso) {
             deliveredAt = latestEvent.time_iso;
         } else if (events.length > 0) {
@@ -157,8 +220,8 @@ function parse17TrackInfo(trackInfo: any): Parsed17TrackData {
 }
 
 /**
- * Fetch tracking info from 17track's official API.
- * Returns detailed tracking events, status, and delivery dates.
+ * Fetch tracking info from 17track. This does NOT consume quota.
+ * Can be called unlimited times after numbers are registered.
  */
 async function fetchFrom17TrackAPI(
     trackingNumbers: string[],
@@ -191,22 +254,17 @@ async function fetchFrom17TrackAPI(
 
         if (data?.data?.accepted && Array.isArray(data.data.accepted)) {
             for (const item of data.data.accepted) {
-                const trackNum = item.number;
-                const trackInfo = item.track_info;
-
-                if (trackInfo) {
-                    results.set(trackNum, parse17TrackInfo(trackInfo));
+                if (item.track_info) {
+                    results.set(item.number, parse17TrackInfo(item.track_info));
                 }
             }
         }
 
-        // Log rejected items for debugging
         if (data?.data?.rejected && Array.isArray(data.data.rejected)) {
             for (const rej of data.data.rejected) {
-                console.log(`[TrackingFetcher] 17track rejected ${rej.number}: ${rej.error?.message || 'unknown error'}`);
+                console.log(`[TrackingFetcher] gettrackinfo rejected ${rej.number}: ${rej.error?.message || 'unknown'}`);
             }
         }
-
     } catch (error: any) {
         console.log(`[TrackingFetcher] 17track gettrackinfo failed: ${error.message}`);
     }
@@ -214,8 +272,12 @@ async function fetchFrom17TrackAPI(
     return results;
 }
 
+// =====================================================================
+// PUBLIC API
+// =====================================================================
+
 /**
- * Main function: Fetch external tracking details for a single tracking number.
+ * Fetch external tracking for a single tracking number.
  */
 export async function fetchExternalTracking(
     trackingNumber: string,
@@ -225,7 +287,12 @@ export async function fetchExternalTracking(
     const carrierInfo = detectCarrier(trackingNumber);
     const universalUrls = getUniversalTrackingUrls(trackingNumber);
 
-    // Base result from carrier detection
+    // Check cache first
+    const cached = getCachedResult(trackingNumber);
+    if (cached) {
+        return cached;
+    }
+
     const result: ExternalTrackingResult = {
         trackingNumber,
         carrier: shopifyCarrierName || carrierInfo.carrier,
@@ -239,23 +306,22 @@ export async function fetchExternalTracking(
         source: 'detection_only',
     };
 
-    // If Shopify natively supports this carrier, no need for external fetch
     if (isShopifyNativeCarrier(trackingNumber, shopifyCarrierName || undefined)) {
         result.source = 'shopify';
+        setCachedResult(trackingNumber, result);
         return result;
     }
 
-    // Try 17track API if key is configured
     const apiKey = process.env.TRACKING_API_KEY || process.env.SEVENTEENTRACK_API_KEY || '';
 
     if (apiKey) {
-        // First register the tracking number
         await register17Track([trackingNumber], apiKey);
 
-        // Wait for 17track to process
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        // Wait only if this was newly registered
+        if (!registeredNumbers.has(trackingNumber)) {
+            await new Promise(resolve => setTimeout(resolve, 2000));
+        }
 
-        // Fetch tracking info
         const trackData = await fetchFrom17TrackAPI([trackingNumber], apiKey);
 
         if (trackData.has(trackingNumber)) {
@@ -264,28 +330,20 @@ export async function fetchExternalTracking(
             result.status = normalize17TrackStatus(data.status);
             result.statusLabel = data.statusLabel;
             result.events = data.events;
-
-            if (data.deliveredAt) {
-                result.deliveredAt = data.deliveredAt;
-            }
-
-            return result;
+            if (data.deliveredAt) result.deliveredAt = data.deliveredAt;
         }
-    } else {
-        console.log('[TrackingFetcher] No TRACKING_API_KEY configured. Set TRACKING_API_KEY in .env for 17track API data.');
     }
 
-    // No external data available — return detection-only results with tracking links
-    result.status = 'pending';
-    result.statusLabel = 'Track via links below';
-    result.source = 'detection_only';
-
+    setCachedResult(trackingNumber, result);
     return result;
 }
 
 /**
- * Batch fetch tracking details for multiple tracking numbers.
- * Optimized to use a single 17track API call for up to 40 numbers.
+ * Batch fetch tracking for multiple tracking numbers.
+ * Optimized: uses cache, only registers new numbers, fetches in batches of 40.
+ * 
+ * QUOTA USAGE: Only NEW tracking numbers consume quota (registration).
+ *              Once registered, all subsequent exports are FREE.
  */
 export async function fetchExternalTrackingBatch(
     trackingNumbers: Array<{
@@ -297,52 +355,63 @@ export async function fetchExternalTrackingBatch(
     const results = new Map<string, ExternalTrackingResult>();
     const apiKey = process.env.TRACKING_API_KEY || process.env.SEVENTEENTRACK_API_KEY || '';
 
-    // Separate native vs non-native carriers
-    const nativeNums: typeof trackingNumbers = [];
-    const externalNums: typeof trackingNumbers = [];
+    // Separate native vs external, check cache
+    const needsFetch: typeof trackingNumbers = [];
 
     for (const tn of trackingNumbers) {
+        // Check cache first
+        const cached = getCachedResult(tn.number);
+        if (cached) {
+            results.set(tn.number, cached);
+            continue;
+        }
+
         if (isShopifyNativeCarrier(tn.number, tn.carrier || undefined)) {
-            nativeNums.push(tn);
+            const carrierInfo = detectCarrier(tn.number);
+            const result: ExternalTrackingResult = {
+                trackingNumber: tn.number,
+                carrier: tn.carrier || carrierInfo.carrier,
+                carrierCode: carrierInfo.carrierCode,
+                status: 'unknown',
+                statusLabel: 'Tracked by Shopify',
+                trackingUrl: tn.url || carrierInfo.trackingUrl,
+                universalTrackingUrls: getUniversalTrackingUrls(tn.number),
+                events: [],
+                lastUpdated: new Date().toISOString(),
+                source: 'shopify',
+            };
+            results.set(tn.number, result);
+            setCachedResult(tn.number, result);
         } else {
-            externalNums.push(tn);
+            needsFetch.push(tn);
         }
     }
 
-    // Handle native carriers (just carrier detection, no API call)
-    for (const tn of nativeNums) {
-        const carrierInfo = detectCarrier(tn.number);
-        results.set(tn.number, {
-            trackingNumber: tn.number,
-            carrier: tn.carrier || carrierInfo.carrier,
-            carrierCode: carrierInfo.carrierCode,
-            status: 'unknown',
-            statusLabel: 'Tracked by Shopify',
-            trackingUrl: tn.url || carrierInfo.trackingUrl,
-            universalTrackingUrls: getUniversalTrackingUrls(tn.number),
-            events: [],
-            lastUpdated: new Date().toISOString(),
-            source: 'shopify',
-        });
+    if (needsFetch.length === 0) {
+        console.log('[TrackingFetcher] All results served from cache');
+        return results;
     }
 
-    // Handle external carriers with 17track API
-    if (externalNums.length > 0 && apiKey) {
-        const nums = externalNums.map(t => t.number);
+    // Fetch from 17track API
+    if (apiKey) {
+        const nums = needsFetch.map(t => t.number);
 
-        // Register all external numbers first
-        await register17Track(nums, apiKey);
+        // Register (only new numbers will actually be registered)
+        const newlyRegistered = await register17Track(nums, apiKey);
 
-        // Wait for 17track to process registrations
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        // Wait only if we registered new numbers
+        if (newlyRegistered > 0) {
+            console.log(`[TrackingFetcher] Waiting for 17track to process ${newlyRegistered} new registrations...`);
+            await new Promise(resolve => setTimeout(resolve, 3000));
+        }
 
-        // Fetch in batches of 40 (17track limit)
+        // Fetch in batches of 40 (17track limit per request)
         const BATCH_SIZE = 40;
         for (let i = 0; i < nums.length; i += BATCH_SIZE) {
             const batch = nums.slice(i, i + BATCH_SIZE);
             const trackData = await fetchFrom17TrackAPI(batch, apiKey);
 
-            for (const tn of externalNums.slice(i, i + BATCH_SIZE)) {
+            for (const tn of needsFetch.slice(i, i + BATCH_SIZE)) {
                 const carrierInfo = detectCarrier(tn.number);
                 const universalUrls = getUniversalTrackingUrls(tn.number);
 
@@ -365,20 +434,18 @@ export async function fetchExternalTrackingBatch(
                     result.status = normalize17TrackStatus(data.status);
                     result.statusLabel = data.statusLabel;
                     result.events = data.events;
-
-                    if (data.deliveredAt) {
-                        result.deliveredAt = data.deliveredAt;
-                    }
+                    if (data.deliveredAt) result.deliveredAt = data.deliveredAt;
                 }
 
                 results.set(tn.number, result);
+                setCachedResult(tn.number, result);
             }
         }
     } else {
-        // No API key — just use carrier detection with tracking links
-        for (const tn of externalNums) {
+        // No API key — detection only
+        for (const tn of needsFetch) {
             const carrierInfo = detectCarrier(tn.number);
-            results.set(tn.number, {
+            const result: ExternalTrackingResult = {
                 trackingNumber: tn.number,
                 carrier: tn.carrier || carrierInfo.carrier,
                 carrierCode: carrierInfo.carrierCode,
@@ -389,7 +456,8 @@ export async function fetchExternalTrackingBatch(
                 events: [],
                 lastUpdated: new Date().toISOString(),
                 source: 'detection_only',
-            });
+            };
+            results.set(tn.number, result);
         }
     }
 
