@@ -1,16 +1,16 @@
 /**
  * External Tracking Fetcher Service
- * Server-side service to fetch delivery details from 17track API
+ * Server-side service to fetch delivery details from 17track
  * for carriers that Shopify doesn't natively track.
  *
- * QUOTA STRATEGY:
- * - gettrackinfo is FREE for already-registered numbers (unlimited queries)
- * - Only register() consumes quota (200 free, then paid plans)
- * - We try gettrackinfo FIRST and only register numbers that get rejected
- * - This means older orders that were already registered are always free
- * - Set TRACKING_API_KEY in .env for 17track API access
+ * STRATEGY:
+ * - Uses 17track's PUBLIC web endpoint (same as t.17track.net website)
+ * - No API key required, no registration quota consumed
+ * - No 200-number limit — unlimited lookups
+ * - Falls back to carrier detection + tracking links if unavailable
  *
- * Without an API key: falls back to carrier detection + tracking links
+ * If TRACKING_API_KEY is set in .env, we also try the official API
+ * as a secondary source for richer data.
  */
 
 import { detectCarrier, isShopifyNativeCarrier, getUniversalTrackingUrls } from './carrier-detection';
@@ -34,7 +34,7 @@ export interface ExternalTrackingResult {
     deliveredAt?: string;
     events: ExternalTrackingEvent[];
     lastUpdated: string;
-    source: 'shopify' | '17track' | 'detection_only';
+    source: 'shopify' | '17track' | '17track_web' | 'detection_only';
 }
 
 // =====================================================================
@@ -43,7 +43,7 @@ export interface ExternalTrackingResult {
 
 /** Cache of tracking results. Cleared after TTL. */
 const trackingCache = new Map<string, { result: ExternalTrackingResult; cachedAt: number }>();
-const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes — keeps data fresh
 
 function getCachedResult(trackingNumber: string): ExternalTrackingResult | null {
     const entry = trackingCache.get(trackingNumber);
@@ -62,7 +62,30 @@ function setCachedResult(trackingNumber: string, result: ExternalTrackingResult)
 // STATUS NORMALIZATION
 // =====================================================================
 
-function normalize17TrackStatus(statusStr: string): ExternalTrackingResult['status'] {
+/**
+ * 17track package status codes (used by both web and API endpoints):
+ * 0 = Not Found
+ * 10 = In Transit
+ * 20 = Expired
+ * 30 = Pick Up
+ * 35 = Undelivered (attempted, failed)
+ * 40 = Delivered
+ * 50 = Alert / Exception
+ */
+function normalize17TrackStatusCode(code: number): ExternalTrackingResult['status'] {
+    switch (code) {
+        case 40: return 'delivered';
+        case 10: return 'in_transit';
+        case 30: return 'out_for_delivery';
+        case 0: return 'pending';
+        case 20:
+        case 35:
+        case 50: return 'exception';
+        default: return 'unknown';
+    }
+}
+
+function normalize17TrackStatusString(statusStr: string): ExternalTrackingResult['status'] {
     const s = (statusStr || '').toLowerCase().replace(/[_\s-]/g, '');
     if (s.includes('delivered')) return 'delivered';
     if (s.includes('intransit') || s.includes('transit')) return 'in_transit';
@@ -86,7 +109,150 @@ function getStatusLabel(status: ExternalTrackingResult['status']): string {
 }
 
 // =====================================================================
-// 17TRACK API
+// 17TRACK PUBLIC WEB ENDPOINT (NO API KEY NEEDED)
+// This is the same endpoint used by the 17track.net website
+// =====================================================================
+
+interface ParsedWebTrackData {
+    status: ExternalTrackingResult['status'];
+    statusLabel: string;
+    events: ExternalTrackingEvent[];
+    deliveredAt?: string;
+    carrierName?: string;
+}
+
+/**
+ * Parse the response from 17track's public web endpoint.
+ * The web endpoint returns a different structure than the official API.
+ */
+function parseWebTrackResponse(trackData: any): ParsedWebTrackData | null {
+    try {
+        // The web endpoint returns tracking info in a nested structure
+        // with z0 (origin country tracking) and z2 (destination country tracking)
+        const track = trackData.track;
+        if (!track) return null;
+
+        const events: ExternalTrackingEvent[] = [];
+
+        // z1 = primary/latest tracking info, z2 = destination tracking, z0 = origin tracking
+        // Process all available tracking sources
+        const trackSources = [track.z2, track.z1, track.z0].filter(Boolean);
+
+        for (const source of trackSources) {
+            if (Array.isArray(source)) {
+                for (const evt of source) {
+                    const timestamp = evt.a || evt.time || '';
+                    const description = evt.z || evt.desc || evt.description || '';
+                    const location = evt.c || evt.location || '';
+
+                    if (timestamp || description) {
+                        // Avoid duplicate events (same timestamp + description)
+                        const isDuplicate = events.some(
+                            e => e.timestamp === timestamp && e.description === description
+                        );
+                        if (!isDuplicate) {
+                            events.push({
+                                timestamp,
+                                status: '',
+                                description,
+                                location,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Package state from the response
+        // e = package state code (0=NotFound, 10=InTransit, 30=PickUp, 40=Delivered, etc.)
+        const packageState = trackData.e || 0;
+        const normalizedStatus = normalize17TrackStatusCode(packageState);
+
+        // Delivered timestamp
+        let deliveredAt: string | undefined;
+        if (normalizedStatus === 'delivered' && events.length > 0) {
+            deliveredAt = events[0].timestamp;
+        }
+
+        // Carrier name
+        const carrierName = trackData.track?.ln1 || trackData.track?.ln2 || undefined;
+
+        return {
+            status: normalizedStatus,
+            statusLabel: getStatusLabel(normalizedStatus),
+            events,
+            deliveredAt,
+            carrierName,
+        };
+    } catch (error: any) {
+        console.error(`[TrackingFetcher] Error parsing web track response:`, error.message);
+        return null;
+    }
+}
+
+/**
+ * Fetch tracking data using 17track's public web endpoint.
+ * This is the same endpoint the 17track.net website uses.
+ * No API key required, no registration quota consumed.
+ *
+ * Supports up to 40 tracking numbers per request.
+ */
+async function fetchViaWebEndpoint(
+    trackingNumbers: string[]
+): Promise<Map<string, ParsedWebTrackData>> {
+    const data = new Map<string, ParsedWebTrackData>();
+
+    if (trackingNumbers.length === 0) return data;
+
+    try {
+        const body = {
+            data: trackingNumbers.map(num => ({ num, fc: 0, sc: 0 })),
+            guid: '',
+            apiKey: '',
+        };
+
+        const response = await fetch('https://t.17track.net/restapi/track', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Origin': 'https://t.17track.net',
+                'Referer': 'https://t.17track.net/',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(20000),
+        });
+
+        if (!response.ok) {
+            console.log(`[TrackingFetcher] Web endpoint HTTP ${response.status}`);
+            return data;
+        }
+
+        const result = await response.json();
+
+        // The web endpoint returns data in result.dat array
+        const items = result?.dat || [];
+
+        for (const item of items) {
+            const trackingNumber = item.no;
+            if (!trackingNumber) continue;
+
+            const parsed = parseWebTrackResponse(item);
+            if (parsed) {
+                data.set(trackingNumber, parsed);
+            }
+        }
+
+        console.log(`[TrackingFetcher] Web endpoint: got data for ${data.size}/${trackingNumbers.length} tracking numbers`);
+    } catch (error: any) {
+        console.log(`[TrackingFetcher] Web endpoint failed: ${error.message}`);
+    }
+
+    return data;
+}
+
+// =====================================================================
+// 17TRACK OFFICIAL API (BACKUP - uses API key if available)
 // =====================================================================
 
 interface Parsed17TrackData {
@@ -97,28 +263,46 @@ interface Parsed17TrackData {
 }
 
 function parse17TrackInfo(trackInfo: any): Parsed17TrackData {
-    const latestStatusStr = trackInfo.latest_status?.status || '';
+    const latestStatusStr = trackInfo.latest_status?.status
+        || trackInfo.package_status
+        || trackInfo.status
+        || '';
     const latestEvent = trackInfo.latest_event;
     const providers = trackInfo.tracking?.providers || [];
     const events: ExternalTrackingEvent[] = [];
 
     for (const provider of providers) {
-        if (provider.events && Array.isArray(provider.events)) {
-            for (const evt of provider.events) {
-                events.push({
-                    timestamp: evt.time_iso || evt.time_utc || '',
-                    status: evt.sub_status || evt.stage || '',
-                    description: evt.description || '',
-                    location: evt.location || evt.address?.city || '',
-                });
+        const providerEvents = provider.events || provider.trackinfo || [];
+        if (Array.isArray(providerEvents)) {
+            for (const evt of providerEvents) {
+                const timestamp = evt.time_iso || evt.time_utc || evt.time || evt.time_raw || '';
+                const status = evt.sub_status || evt.stage || evt.status || '';
+                const description = evt.description || evt.Details || evt.context || evt.message || status || '';
+                const location = evt.location || evt.address?.city || evt.address || '';
+
+                if (timestamp || description) {
+                    events.push({ timestamp, status, description, location });
+                }
             }
         }
     }
 
+    // Fallback: use latest_event if no provider events
+    if (events.length === 0 && latestEvent) {
+        const timestamp = latestEvent.time_iso || latestEvent.time_utc || latestEvent.time || '';
+        const description = latestEvent.description || latestEvent.context || '';
+        const location = latestEvent.location || latestEvent.address?.city || '';
+
+        if (timestamp || description) {
+            events.push({ timestamp, status: latestStatusStr, description, location });
+        }
+    }
+
+    const normalizedStatus = normalize17TrackStatusString(latestStatusStr);
     let deliveredAt: string | undefined;
-    const normalizedStatus = normalize17TrackStatus(latestStatusStr);
     if (normalizedStatus === 'delivered') {
-        deliveredAt = latestEvent?.time_iso || (events.length > 0 ? events[0].timestamp : undefined);
+        deliveredAt = latestEvent?.time_iso || latestEvent?.time_utc || latestEvent?.time
+            || (events.length > 0 ? events[0].timestamp : undefined);
     }
 
     return {
@@ -130,16 +314,14 @@ function parse17TrackInfo(trackInfo: any): Parsed17TrackData {
 }
 
 /**
- * Step 1: Try gettrackinfo FIRST (free, no quota consumed).
- * Returns data for already-registered numbers.
- * Returns list of rejected (unregistered) numbers that need registration.
+ * Try official API gettrackinfo (free for already-registered numbers).
+ * Only used as a backup if web endpoint fails.
  */
-async function tryGetTrackInfo(
+async function tryOfficialApiGetTrackInfo(
     trackingNumbers: string[],
     apiKey: string
-): Promise<{ data: Map<string, Parsed17TrackData>; unregistered: string[] }> {
+): Promise<Map<string, Parsed17TrackData>> {
     const data = new Map<string, Parsed17TrackData>();
-    const unregistered: string[] = [];
 
     try {
         const body = trackingNumbers.map(num => ({ number: num, carrier: 0 }));
@@ -150,101 +332,21 @@ async function tryGetTrackInfo(
             signal: AbortSignal.timeout(15000),
         });
 
-        if (!response.ok) {
-            console.log(`[TrackingFetcher] gettrackinfo HTTP ${response.status}`);
-            return { data, unregistered: trackingNumbers };
-        }
+        if (!response.ok) return data;
 
         const result = await response.json();
 
-        // Accepted = already registered, has tracking data
         for (const item of (result?.data?.accepted || [])) {
             if (item.track_info) {
                 data.set(item.number, parse17TrackInfo(item.track_info));
             }
         }
 
-        // Rejected = not registered yet (error code -18019902)
-        for (const item of (result?.data?.rejected || [])) {
-            if (item.error?.code === -18019902) {
-                unregistered.push(item.number);
-            }
-        }
-
-        console.log(`[TrackingFetcher] gettrackinfo: ${data.size} with data, ${unregistered.length} need registration`);
+        console.log(`[TrackingFetcher] Official API: ${data.size} results`);
     } catch (error: any) {
-        console.log(`[TrackingFetcher] gettrackinfo failed: ${error.message}`);
-        return { data, unregistered: trackingNumbers };
+        console.log(`[TrackingFetcher] Official API failed: ${error.message}`);
     }
 
-    return { data, unregistered };
-}
-
-/**
- * Step 2: Register new tracking numbers (consumes quota).
- * Only called for numbers not yet registered.
- */
-async function registerNumbers(
-    trackingNumbers: string[],
-    apiKey: string
-): Promise<{ registered: number; quotaRemain: number }> {
-    if (trackingNumbers.length === 0) return { registered: 0, quotaRemain: -1 };
-
-    try {
-        const body = trackingNumbers.map(num => ({ number: num, carrier: 0 }));
-        const response = await fetch('https://api.17track.net/track/v2.2/register', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', '17token': apiKey },
-            body: JSON.stringify(body),
-            signal: AbortSignal.timeout(15000),
-        });
-
-        if (!response.ok) {
-            console.log(`[TrackingFetcher] register HTTP ${response.status}`);
-            return { registered: 0, quotaRemain: -1 };
-        }
-
-        const result = await response.json();
-        const accepted = result?.data?.accepted?.length || 0;
-        const rejected = result?.data?.rejected?.length || 0;
-
-        console.log(`[TrackingFetcher] Registered ${accepted} new numbers (${rejected} already existed). Quota used: ${accepted}`);
-
-        // Check remaining quota
-        let quotaRemain = -1;
-        try {
-            const quotaRes = await fetch('https://api.17track.net/track/v2.2/getquota', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', '17token': apiKey },
-                body: '{}',
-                signal: AbortSignal.timeout(5000),
-            });
-            const quotaData = await quotaRes.json();
-            quotaRemain = quotaData?.data?.quota_remain ?? -1;
-            console.log(`[TrackingFetcher] Quota remaining: ${quotaRemain}`);
-        } catch { /* ignore quota check errors */ }
-
-        return { registered: accepted, quotaRemain };
-    } catch (error: any) {
-        console.log(`[TrackingFetcher] register failed: ${error.message}`);
-        return { registered: 0, quotaRemain: -1 };
-    }
-}
-
-/**
- * Step 3: Fetch tracking info for newly registered numbers.
- * Called after register + delay.
- */
-async function fetchNewlyRegistered(
-    trackingNumbers: string[],
-    apiKey: string
-): Promise<Map<string, Parsed17TrackData>> {
-    if (trackingNumbers.length === 0) return new Map();
-
-    // 17track needs time to process newly registered numbers
-    await new Promise(resolve => setTimeout(resolve, 3000));
-
-    const { data } = await tryGetTrackInfo(trackingNumbers, apiKey);
     return data;
 }
 
@@ -257,7 +359,8 @@ function buildResult(
     carrier: string | null | undefined,
     url: string | null | undefined,
     source: ExternalTrackingResult['source'],
-    trackData?: Parsed17TrackData
+    webData?: ParsedWebTrackData,
+    apiData?: Parsed17TrackData
 ): ExternalTrackingResult {
     const carrierInfo = detectCarrier(trackingNumber);
     const universalUrls = getUniversalTrackingUrls(trackingNumber);
@@ -275,12 +378,24 @@ function buildResult(
         source,
     };
 
-    if (trackData) {
+    // Prefer web data (same source as 17track.net website)
+    if (webData) {
+        result.source = '17track_web';
+        result.status = webData.status;
+        result.statusLabel = webData.statusLabel;
+        result.events = webData.events;
+        if (webData.deliveredAt) result.deliveredAt = webData.deliveredAt;
+        if (webData.carrierName && result.carrier === 'Unknown Carrier') {
+            result.carrier = webData.carrierName;
+        }
+    }
+    // Fall back to official API data
+    else if (apiData) {
         result.source = '17track';
-        result.status = normalize17TrackStatus(trackData.status);
-        result.statusLabel = trackData.statusLabel;
-        result.events = trackData.events;
-        if (trackData.deliveredAt) result.deliveredAt = trackData.deliveredAt;
+        result.status = normalize17TrackStatusString(apiData.status);
+        result.statusLabel = apiData.statusLabel;
+        result.events = apiData.events;
+        if (apiData.deliveredAt) result.deliveredAt = apiData.deliveredAt;
     }
 
     return result;
@@ -303,27 +418,29 @@ export async function fetchExternalTracking(
         return result;
     }
 
+    // Primary: Use web endpoint (no API key needed, no quota)
+    const webData = await fetchViaWebEndpoint([trackingNumber]);
+
+    if (webData.has(trackingNumber)) {
+        const result = buildResult(
+            trackingNumber, shopifyCarrierName, shopifyTrackingUrl,
+            '17track_web', webData.get(trackingNumber)
+        );
+        setCachedResult(trackingNumber, result);
+        return result;
+    }
+
+    // Backup: Try official API if key is available
     const apiKey = process.env.TRACKING_API_KEY || process.env.SEVENTEENTRACK_API_KEY || '';
-
     if (apiKey) {
-        // Try gettrackinfo first (free)
-        const { data, unregistered } = await tryGetTrackInfo([trackingNumber], apiKey);
-
-        if (data.has(trackingNumber)) {
-            const result = buildResult(trackingNumber, shopifyCarrierName, shopifyTrackingUrl, '17track', data.get(trackingNumber));
+        const apiData = await tryOfficialApiGetTrackInfo([trackingNumber], apiKey);
+        if (apiData.has(trackingNumber)) {
+            const result = buildResult(
+                trackingNumber, shopifyCarrierName, shopifyTrackingUrl,
+                '17track', undefined, apiData.get(trackingNumber)
+            );
             setCachedResult(trackingNumber, result);
             return result;
-        }
-
-        // Register if needed (uses quota) and retry
-        if (unregistered.includes(trackingNumber)) {
-            await registerNumbers([trackingNumber], apiKey);
-            const newData = await fetchNewlyRegistered([trackingNumber], apiKey);
-            if (newData.has(trackingNumber)) {
-                const result = buildResult(trackingNumber, shopifyCarrierName, shopifyTrackingUrl, '17track', newData.get(trackingNumber));
-                setCachedResult(trackingNumber, result);
-                return result;
-            }
         }
     }
 
@@ -339,13 +456,11 @@ export async function fetchExternalTracking(
  *
  * STRATEGY:
  * 1. Check cache → return cached results instantly
- * 2. Call gettrackinfo for all non-cached numbers (FREE, no quota)
- *    → Returns data for already-registered numbers
- * 3. For rejected (unregistered) numbers → register them (uses quota)
- * 4. After registration → call gettrackinfo again for the new ones
+ * 2. Use 17track web endpoint for all non-cached numbers (FREE, no quota, no API key)
+ * 3. For any that didn't return data via web, try official API (if key available)
+ * 4. For any remaining, provide detection-only results with tracking links
  *
- * Net result: only truly new tracking numbers consume quota.
- * Re-exports of the same orders are 100% free.
+ * Net result: NO quota consumed. Unlimited tracking lookups.
  */
 export async function fetchExternalTrackingBatch(
     trackingNumbers: Array<{
@@ -376,17 +491,7 @@ export async function fetchExternalTrackingBatch(
         }
     }
 
-    if (needsFetch.length === 0 || !apiKey) {
-        // No API key or nothing to fetch — add detection-only results
-        for (const tn of needsFetch) {
-            const result = buildResult(tn.number, tn.carrier, tn.url, 'detection_only');
-            result.status = 'pending';
-            result.statusLabel = 'Track via links below';
-            results.set(tn.number, result);
-        }
-        if (!apiKey && needsFetch.length > 0) {
-            console.log('[TrackingFetcher] No TRACKING_API_KEY set. Add to .env for tracking data.');
-        }
+    if (needsFetch.length === 0) {
         return results;
     }
 
@@ -396,51 +501,56 @@ export async function fetchExternalTrackingBatch(
     const infoMap = new Map(needsFetch.map(tn => [tn.number, tn]));
     const allNums = needsFetch.map(t => t.number);
 
-    // Step 1: Try gettrackinfo FIRST (free) in batches of 40
+    // Step 1: Use web endpoint (FREE, no quota, no API key needed)
     const BATCH_SIZE = 40;
-    const allUnregistered: string[] = [];
+    const missingFromWeb: string[] = [];
 
     for (let i = 0; i < allNums.length; i += BATCH_SIZE) {
         const batch = allNums.slice(i, i + BATCH_SIZE);
-        const { data, unregistered } = await tryGetTrackInfo(batch, apiKey);
+        const webData = await fetchViaWebEndpoint(batch);
 
-        // Process results
-        for (const [num, trackData] of data) {
-            const info = infoMap.get(num);
-            const result = buildResult(num, info?.carrier, info?.url, '17track', trackData);
-            results.set(num, result);
-            setCachedResult(num, result);
+        for (const num of batch) {
+            if (webData.has(num)) {
+                const info = infoMap.get(num);
+                const result = buildResult(num, info?.carrier, info?.url, '17track_web', webData.get(num));
+                results.set(num, result);
+                setCachedResult(num, result);
+            } else {
+                missingFromWeb.push(num);
+            }
         }
 
-        allUnregistered.push(...unregistered);
+        // Small delay between batches to be polite
+        if (i + BATCH_SIZE < allNums.length) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
     }
 
-    // Step 2: Register unregistered numbers (uses quota)
-    if (allUnregistered.length > 0) {
-        console.log(`[TrackingFetcher] ${allUnregistered.length} numbers need registration (will use quota)...`);
-        const { registered, quotaRemain } = await registerNumbers(allUnregistered, apiKey);
+    // Step 2: For numbers not found via web, try official API (if key available)
+    if (missingFromWeb.length > 0 && apiKey) {
+        console.log(`[TrackingFetcher] ${missingFromWeb.length} numbers not found via web endpoint, trying official API...`);
 
-        if (registered > 0) {
-            // Step 3: Fetch newly registered numbers
-            const newlyRegisteredData = await fetchNewlyRegistered(allUnregistered, apiKey);
+        for (let i = 0; i < missingFromWeb.length; i += BATCH_SIZE) {
+            const batch = missingFromWeb.slice(i, i + BATCH_SIZE);
+            const apiData = await tryOfficialApiGetTrackInfo(batch, apiKey);
 
-            for (const [num, trackData] of newlyRegisteredData) {
+            for (const [num, trackData] of apiData) {
                 const info = infoMap.get(num);
-                const result = buildResult(num, info?.carrier, info?.url, '17track', trackData);
+                const result = buildResult(num, info?.carrier, info?.url, '17track', undefined, trackData);
                 results.set(num, result);
                 setCachedResult(num, result);
             }
         }
+    }
 
-        // For any that still don't have data, add detection-only
-        for (const num of allUnregistered) {
-            if (!results.has(num)) {
-                const info = infoMap.get(num);
-                const result = buildResult(num, info?.carrier, info?.url, 'detection_only');
-                result.status = 'pending';
-                result.statusLabel = 'Recently registered - data available on next export';
-                results.set(num, result);
-            }
+    // Step 3: Detection-only results for any remaining
+    for (const num of allNums) {
+        if (!results.has(num)) {
+            const info = infoMap.get(num);
+            const result = buildResult(num, info?.carrier, info?.url, 'detection_only');
+            result.status = 'pending';
+            result.statusLabel = 'Track via links below';
+            results.set(num, result);
         }
     }
 

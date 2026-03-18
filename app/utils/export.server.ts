@@ -285,7 +285,7 @@ function buildEnhancedTrackingInfo(order: Order, externalData: Map<string, Exter
                 }
 
                 // Build tracking info text from external data
-                if (!latestTrackingInfo && ext.source === '17track') {
+                if (!latestTrackingInfo && (ext.source === '17track' || ext.source === '17track_web')) {
                     const infoParts: string[] = [];
 
                     // Status first
