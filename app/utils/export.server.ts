@@ -7,7 +7,7 @@
 import * as XLSX from 'xlsx';
 import type { Order, Fulfillment } from '~/lib/types';
 import { detectCarrier, isShopifyNativeCarrier, getUniversalTrackingUrls } from '~/utils/carrier-detection';
-import { fetchExternalTracking, type ExternalTrackingResult } from '~/utils/tracking-fetcher.server';
+import { fetchExternalTracking, fetchExternalTrackingBatch, type ExternalTrackingResult } from '~/utils/tracking-fetcher.server';
 
 export interface ExportOptions {
     format: 'xlsx' | 'csv';
@@ -240,18 +240,8 @@ async function fetchExternalTrackingForOrders(
 
     console.log(`[Export] Fetching external tracking for ${unique.length} tracking numbers...`);
 
-    // Fetch all in parallel batches
-    const results = new Map<string, ExternalTrackingResult>();
-    const BATCH_SIZE = 5;
-    for (let i = 0; i < unique.length; i += BATCH_SIZE) {
-        const batch = unique.slice(i, i + BATCH_SIZE);
-        const batchResults = await Promise.all(
-            batch.map((tn) => fetchExternalTracking(tn.number, tn.carrier, tn.url))
-        );
-        batchResults.forEach((result) => {
-            results.set(result.trackingNumber, result);
-        });
-    }
+    // Use batch fetcher for efficiency (single API call for up to 40 numbers)
+    const results = await fetchExternalTrackingBatch(unique);
 
     console.log(`[Export] Got external tracking data for ${results.size} tracking numbers`);
     return results;
