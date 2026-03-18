@@ -122,7 +122,7 @@ export async function action({ request }: ActionFunctionArgs) {
                 ordersData = JSON.parse(formData.get('ordersData') as string || '[]');
             }
 
-            const buffer = generateExcelFile(ordersData, {
+            const buffer = await generateExcelFile(ordersData, {
                 format,
                 includeLineItems,
                 includeFulfillments,

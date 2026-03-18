@@ -1,11 +1,13 @@
 /**
  * Order Delivery Exporter - Export Utilities
  * Server-side functions for exporting orders to Excel/CSV
+ * Enhanced with external tracking data for non-native carriers
  */
 
 import * as XLSX from 'xlsx';
 import type { Order, Fulfillment } from '~/lib/types';
-import { detectCarrier } from '~/utils/carrier-detection';
+import { detectCarrier, isShopifyNativeCarrier, getUniversalTrackingUrls } from '~/utils/carrier-detection';
+import { fetchExternalTracking, type ExternalTrackingResult } from '~/utils/tracking-fetcher.server';
 
 export interface ExportOptions {
     format: 'xlsx' | 'csv';
@@ -17,7 +19,7 @@ export interface ExportOptions {
 /**
  * Format date for display
  */
-function formatDate(dateString: string | null): string {
+function formatDate(dateString: string | null | undefined): string {
     if (!dateString) return '';
     return new Date(dateString).toLocaleString('en-US', {
         year: 'numeric',
@@ -60,7 +62,29 @@ function formatAddress(address: Order['shippingAddress']): string {
 }
 
 /**
+ * Known dummy/generic carrier names that Shopify might store
+ * but aren't real, useful carrier identifiers.
+ */
+const GENERIC_CARRIER_NAMES = [
+    'one', 'other', 'custom', 'default', 'none', 'manual',
+    'shopify', 'unknown', 'carrier', 'shipping', 'n/a', 'na',
+];
+
+/**
+ * Check if a carrier name from Shopify is a real, useful name
+ * or a generic/dummy value that should be replaced by detection.
+ */
+function isGenericCarrierName(name: string | null | undefined): boolean {
+    if (!name) return true;
+    const normalized = name.toLowerCase().trim();
+    if (normalized.length <= 2) return true; // Too short to be useful
+    return GENERIC_CARRIER_NAMES.includes(normalized);
+}
+
+/**
  * Get tracking info summary — enhanced with carrier detection
+ * Now handles generic carrier names (like "One") by replacing
+ * them with detected carrier names.
  */
 function getTrackingInfo(order: Order): { carriers: string; trackingNumbers: string; trackingUrls: string } {
     const carriers: string[] = [];
@@ -71,17 +95,22 @@ function getTrackingInfo(order: Order): { carriers: string; trackingNumbers: str
         for (const tracking of fulfillment.trackingInfo) {
             if (tracking.number) trackingNumbers.push(tracking.number);
 
-            if (tracking.company) {
+            // Decide on carrier name
+            if (tracking.company && !isGenericCarrierName(tracking.company)) {
+                // Real carrier name from Shopify — use it
                 carriers.push(tracking.company);
             } else if (tracking.number) {
-                // Detect carrier from tracking number if Shopify doesn't provide it
+                // Generic/missing carrier name — detect from tracking number
                 const detected = detectCarrier(tracking.number);
                 if (detected.carrier !== 'Unknown Carrier') {
                     carriers.push(detected.carrier);
+                } else {
+                    carriers.push(tracking.company || 'International Carrier');
                 }
             }
 
-            if (tracking.url) {
+            // Decide on tracking URL
+            if (tracking.url && tracking.url.startsWith('http')) {
                 trackingUrls.push(tracking.url);
             } else if (tracking.number) {
                 // Generate tracking URL from carrier detection
@@ -99,7 +128,7 @@ function getTrackingInfo(order: Order): { carriers: string; trackingNumbers: str
 }
 
 /**
- * Get latest tracking update string
+ * Get latest tracking update string from Shopify fulfillment events
  */
 function getLatestTrackingUpdate(order: Order): string {
     const updates: string[] = [];
@@ -110,7 +139,6 @@ function getLatestTrackingUpdate(order: Order): string {
             const locationParts = [event.city, event.province, event.country, event.zip].filter(Boolean);
             const location = locationParts.length > 0 ? locationParts.join(', ') : '';
 
-            // Format: "YYYY-MM-DD HH:mm Location, Status, Message"
             const parts = [
                 formatDate(event.happenedAt),
                 location,
@@ -153,14 +181,189 @@ function getDeliveryStatus(order: Order): { status: string; deliveredAt: string;
 }
 
 /**
- * Transform orders to flat rows for export
+ * Collect all tracking numbers from an order that need external lookups
  */
-function transformOrdersToRows(orders: Order[], options: ExportOptions): any[] {
+function getTrackingNumbersForExternalLookup(order: Order): Array<{
+    number: string;
+    carrier: string | null;
+    url: string | null;
+}> {
+    const items: Array<{ number: string; carrier: string | null; url: string | null }> = [];
+
+    for (const fulfillment of order.fulfillments) {
+        for (const tracking of fulfillment.trackingInfo) {
+            if (tracking.number) {
+                // Check if this is a non-native carrier that needs external lookup
+                const isNative = isShopifyNativeCarrier(tracking.number, tracking.company || undefined);
+                const hasShopifyEvents = fulfillment.events?.nodes && fulfillment.events.nodes.length > 0;
+                const hasDeliveryDate = !!fulfillment.deliveredAt;
+
+                // Only look up externally if Shopify doesn't already have good data
+                if (!isNative && !hasShopifyEvents && !hasDeliveryDate) {
+                    items.push({
+                        number: tracking.number,
+                        carrier: tracking.company,
+                        url: tracking.url,
+                    });
+                }
+            }
+        }
+    }
+
+    return items;
+}
+
+/**
+ * Fetch external tracking data for all orders that need it.
+ * Returns a map keyed by tracking number.
+ */
+async function fetchExternalTrackingForOrders(
+    orders: Order[]
+): Promise<Map<string, ExternalTrackingResult>> {
+    const allTrackingNumbers: Array<{ number: string; carrier: string | null; url: string | null }> = [];
+
+    for (const order of orders) {
+        const items = getTrackingNumbersForExternalLookup(order);
+        allTrackingNumbers.push(...items);
+    }
+
+    // Remove duplicates
+    const uniqueMap = new Map<string, { number: string; carrier: string | null; url: string | null }>();
+    for (const item of allTrackingNumbers) {
+        uniqueMap.set(item.number, item);
+    }
+    const unique = Array.from(uniqueMap.values());
+
+    if (unique.length === 0) {
+        return new Map();
+    }
+
+    console.log(`[Export] Fetching external tracking for ${unique.length} tracking numbers...`);
+
+    // Fetch all in parallel batches
+    const results = new Map<string, ExternalTrackingResult>();
+    const BATCH_SIZE = 5;
+    for (let i = 0; i < unique.length; i += BATCH_SIZE) {
+        const batch = unique.slice(i, i + BATCH_SIZE);
+        const batchResults = await Promise.all(
+            batch.map((tn) => fetchExternalTracking(tn.number, tn.carrier, tn.url))
+        );
+        batchResults.forEach((result) => {
+            results.set(result.trackingNumber, result);
+        });
+    }
+
+    console.log(`[Export] Got external tracking data for ${results.size} tracking numbers`);
+    return results;
+}
+
+/**
+ * Build enhanced tracking info for export by combining
+ * Shopify data with external tracking results.
+ */
+function buildEnhancedTrackingInfo(order: Order, externalData: Map<string, ExternalTrackingResult>): {
+    latestTrackingInfo: string;
+    deliveredAt: string;
+    estimatedDelivery: string;
+    deliveryStatus: string;
+} {
+    // Start with Shopify's data
+    const shopifyDelivery = getDeliveryStatus(order);
+    const shopifyTracking = getLatestTrackingUpdate(order);
+
+    let latestTrackingInfo = shopifyTracking;
+    let deliveredAt = shopifyDelivery.deliveredAt;
+    let estimatedDelivery = shopifyDelivery.estimatedDelivery;
+    let deliveryStatus = shopifyDelivery.status;
+
+    // If Shopify data is empty, try to supplement with external data
+    for (const fulfillment of order.fulfillments) {
+        for (const tracking of fulfillment.trackingInfo) {
+            if (tracking.number && externalData.has(tracking.number)) {
+                const ext = externalData.get(tracking.number)!;
+
+                // Supplement delivery status if Shopify is not providing it
+                if (!deliveredAt && ext.status === 'delivered') {
+                    deliveredAt = 'Delivered (via external tracking)';
+                }
+
+                if (!estimatedDelivery && ext.estimatedDelivery) {
+                    estimatedDelivery = ext.estimatedDelivery;
+                }
+
+                // Build tracking info text from external sources
+                if (!latestTrackingInfo) {
+                    const infoParts: string[] = [];
+                    infoParts.push(`Status: ${ext.statusLabel}`);
+                    infoParts.push(`Carrier: ${ext.carrier}`);
+                    infoParts.push(`Source: ${ext.source}`);
+
+                    if (ext.events.length > 0) {
+                        const lastEvent = ext.events[0];
+                        infoParts.push(`Latest: ${lastEvent.description}`);
+                        if (lastEvent.location) {
+                            infoParts.push(`Location: ${lastEvent.location}`);
+                        }
+                        infoParts.push(`Time: ${formatDate(lastEvent.timestamp)}`);
+                    }
+
+                    // Add tracking links for manual lookup
+                    const universalUrls = ext.universalTrackingUrls;
+                    if (universalUrls.length > 0) {
+                        infoParts.push(`Track: ${universalUrls.map(u => u.url).join(' | ')}`);
+                    }
+
+                    latestTrackingInfo = infoParts.join(' | ');
+                }
+
+                // Update delivery status from external if Shopify is generic
+                if (deliveryStatus === 'Unfulfilled' || deliveryStatus === 'FULFILLED') {
+                    deliveryStatus = ext.statusLabel;
+                }
+            }
+        }
+    }
+
+    // If we still have no tracking info, provide helpful tracking links
+    if (!latestTrackingInfo) {
+        const trackingLinks: string[] = [];
+        for (const fulfillment of order.fulfillments) {
+            for (const tracking of fulfillment.trackingInfo) {
+                if (tracking.number) {
+                    const universalUrls = getUniversalTrackingUrls(tracking.number);
+                    trackingLinks.push(
+                        `${tracking.number}: ${universalUrls.map(u => `${u.name}: ${u.url}`).join(' | ')}`
+                    );
+                }
+            }
+        }
+        if (trackingLinks.length > 0) {
+            latestTrackingInfo = trackingLinks.join('\n');
+        }
+    }
+
+    return {
+        latestTrackingInfo,
+        deliveredAt,
+        estimatedDelivery,
+        deliveryStatus,
+    };
+}
+
+/**
+ * Transform orders to flat rows for export
+ * Now includes external tracking data for non-native carriers
+ */
+function transformOrdersToRows(
+    orders: Order[],
+    options: ExportOptions,
+    externalTrackingData: Map<string, ExternalTrackingResult>
+): any[] {
     const rows: any[] = [];
 
     for (const order of orders) {
         const tracking = getTrackingInfo(order);
-        const delivery = getDeliveryStatus(order);
+        const enhanced = buildEnhancedTrackingInfo(order, externalTrackingData);
         const currency = order.totalPriceSet?.shopMoney?.currencyCode || 'USD';
 
         // Base order row
@@ -171,7 +374,7 @@ function transformOrdersToRows(orders: Order[], options: ExportOptions): any[] {
             'Updated At': formatDate(order.updatedAt),
             'Financial Status': order.displayFinancialStatus || '',
             'Fulfillment Status': order.displayFulfillmentStatus || '',
-            'Delivery Status': delivery.status,
+            'Delivery Status': enhanced.deliveryStatus,
             'Total': formatCurrency(order.totalPriceSet?.shopMoney?.amount, currency),
             'Subtotal': formatCurrency(order.subtotalPriceSet?.shopMoney?.amount, currency),
             'Shipping': formatCurrency(order.totalShippingPriceSet?.shopMoney?.amount, currency),
@@ -197,14 +400,14 @@ function transformOrdersToRows(orders: Order[], options: ExportOptions): any[] {
             baseRow['Billing Address'] = formatAddress(order.billingAddress);
         }
 
-        // Tracking info
+        // Tracking info — enhanced
         if (options.includeFulfillments) {
             baseRow['Carrier'] = tracking.carriers;
             baseRow['Tracking Numbers'] = tracking.trackingNumbers;
             baseRow['Tracking URLs'] = tracking.trackingUrls;
-            baseRow['Delivered At'] = delivery.deliveredAt;
-            baseRow['Estimated Delivery'] = delivery.estimatedDelivery;
-            baseRow['Latest Tracking Info'] = getLatestTrackingUpdate(order);
+            baseRow['Delivered At'] = enhanced.deliveredAt;
+            baseRow['Estimated Delivery'] = enhanced.estimatedDelivery;
+            baseRow['Latest Tracking Info'] = enhanced.latestTrackingInfo;
         }
 
         // Line items
@@ -246,10 +449,22 @@ function transformOrdersToRows(orders: Order[], options: ExportOptions): any[] {
 }
 
 /**
- * Generate Excel file from orders
+ * Generate Excel file from orders — now with external tracking enrichment
  */
-export function generateExcelFile(orders: Order[], options: ExportOptions): Buffer {
-    const rows = transformOrdersToRows(orders, options);
+export async function generateExcelFile(orders: Order[], options: ExportOptions): Promise<Buffer> {
+    // Fetch external tracking data for non-native carriers
+    let externalTrackingData = new Map<string, ExternalTrackingResult>();
+
+    if (options.includeFulfillments) {
+        try {
+            externalTrackingData = await fetchExternalTrackingForOrders(orders);
+        } catch (error: any) {
+            console.error('[Export] Failed to fetch external tracking data:', error.message);
+            // Continue without external data — Shopify data will still be used
+        }
+    }
+
+    const rows = transformOrdersToRows(orders, options, externalTrackingData);
 
     // Create workbook and worksheet
     const workbook = XLSX.utils.book_new();
