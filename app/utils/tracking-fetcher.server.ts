@@ -36,22 +36,19 @@ export interface ExternalTrackingResult {
 }
 
 /**
- * Normalize status codes from 17track into our standard statuses.
- * 17track status codes:
- * 0: Not Found, 10: In Transit, 20: Expired, 30: Pick Up,
- * 35: Undelivered, 40: Delivered, 50: Returned, 60: Alert
+ * Normalize status strings from 17track API v2.2.
+ * The API returns status as a string like "Delivered", "InTransit", etc.
  */
-function normalize17TrackStatus(statusCode: number): ExternalTrackingResult['status'] {
-    switch (statusCode) {
-        case 40: return 'delivered';
-        case 10: return 'in_transit';
-        case 30: return 'out_for_delivery';
-        case 0: return 'pending';
-        case 35:
-        case 50:
-        case 60: return 'exception';
-        default: return 'unknown';
-    }
+function normalize17TrackStatus(statusStr: string): ExternalTrackingResult['status'] {
+    const normalized = (statusStr || '').toLowerCase().replace(/[_\s-]/g, '');
+    if (normalized.includes('delivered')) return 'delivered';
+    if (normalized.includes('intransit') || normalized.includes('transit')) return 'in_transit';
+    if (normalized.includes('pickup') || normalized.includes('outfordelivery')) return 'out_for_delivery';
+    if (normalized.includes('notfound') || normalized.includes('pending')) return 'pending';
+    if (normalized.includes('expired') || normalized.includes('exception') ||
+        normalized.includes('alert') || normalized.includes('undelivered') ||
+        normalized.includes('returned')) return 'exception';
+    return 'unknown';
 }
 
 /**
@@ -61,7 +58,7 @@ function getStatusLabel(status: ExternalTrackingResult['status']): string {
     const labels: Record<ExternalTrackingResult['status'], string> = {
         delivered: 'Delivered',
         in_transit: 'In Transit',
-        out_for_delivery: 'Pick Up / Out for Delivery',
+        out_for_delivery: 'Out for Delivery',
         pending: 'Not Found / Pending',
         exception: 'Exception / Alert',
         unknown: 'Unknown',
@@ -105,14 +102,69 @@ async function register17Track(trackingNumbers: string[], apiKey: string): Promi
 }
 
 /**
+ * Parse a single 17track API track_info response into our internal format.
+ */
+interface Parsed17TrackData {
+    status: string;
+    statusLabel: string;
+    events: ExternalTrackingEvent[];
+    deliveredAt?: string;
+    latestDescription?: string;
+    latestLocation?: string;
+}
+
+function parse17TrackInfo(trackInfo: any): Parsed17TrackData {
+    // Extract status — it's a string like "Delivered", "InTransit"
+    const latestStatusStr = trackInfo.latest_status?.status || '';
+    const latestEvent = trackInfo.latest_event;
+    const providers = trackInfo.tracking?.providers || [];
+    const events: ExternalTrackingEvent[] = [];
+
+    // Parse events from providers
+    for (const provider of providers) {
+        if (provider.events && Array.isArray(provider.events)) {
+            for (const evt of provider.events) {
+                events.push({
+                    timestamp: evt.time_iso || evt.time_utc || '',
+                    status: evt.sub_status || evt.stage || '',
+                    description: evt.description || '',
+                    location: evt.location || evt.address?.city || '',
+                });
+            }
+        }
+    }
+
+    // Get delivered date — if status is "Delivered", use the latest event time
+    let deliveredAt: string | undefined;
+    const normalizedStatus = normalize17TrackStatus(latestStatusStr);
+    if (normalizedStatus === 'delivered') {
+        // Use latest event time as delivery date
+        if (latestEvent?.time_iso) {
+            deliveredAt = latestEvent.time_iso;
+        } else if (events.length > 0) {
+            deliveredAt = events[0].timestamp;
+        }
+    }
+
+    return {
+        status: latestStatusStr,
+        statusLabel: getStatusLabel(normalizedStatus),
+        events,
+        deliveredAt,
+        latestDescription: latestEvent?.description || '',
+        latestLocation: latestEvent?.location || latestEvent?.address?.city || '',
+    };
+}
+
+/**
  * Fetch tracking info from 17track's official API.
  * Returns detailed tracking events, status, and delivery dates.
  */
 async function fetchFrom17TrackAPI(
     trackingNumbers: string[],
     apiKey: string
-): Promise<Map<string, { status: number; events: any[]; deliveredAt?: string; lastEvent?: any }>> {
-    const results = new Map<string, { status: number; events: any[]; deliveredAt?: string; lastEvent?: any }>();
+): Promise<Map<string, Parsed17TrackData>> {
+    const results = new Map<string, Parsed17TrackData>();
 
     try {
         const body = trackingNumbers.map(num => ({
@@ -143,30 +195,16 @@ async function fetchFrom17TrackAPI(
                 const trackInfo = item.track_info;
 
                 if (trackInfo) {
-                    const latestStatus = trackInfo.latest_status?.status ?? -1;
-                    const events = trackInfo.tracking?.providers?.[0]?.events || [];
-                    const latestEvent = trackInfo.latest_event;
-
-                    // Try to get the delivered date from the last event with "delivered" status
-                    let deliveredAt: string | undefined;
-                    if (latestStatus === 40 && events.length > 0) {
-                        // The most recent event is the delivery event
-                        deliveredAt = events[0]?.time_iso || events[0]?.time_utc;
-                    }
-
-                    results.set(trackNum, {
-                        status: latestStatus,
-                        events,
-                        deliveredAt,
-                        lastEvent: latestEvent,
-                    });
+                    results.set(trackNum, parse17TrackInfo(trackInfo));
                 }
             }
         }
 
-        // Also handle "rejected" items (already registered but trackable)
+        // Log rejected items for debugging
         if (data?.data?.rejected && Array.isArray(data.data.rejected)) {
-            console.log(`[TrackingFetcher] 17track rejected items:`, data.data.rejected.length);
+            for (const rej of data.data.rejected) {
+                console.log(`[TrackingFetcher] 17track rejected ${rej.number}: ${rej.error?.message || 'unknown error'}`);
+            }
         }
 
     } catch (error: any) {
@@ -177,7 +215,7 @@ async function fetchFrom17TrackAPI(
 }
 
 /**
- * Main function: Fetch external tracking details for a tracking number.
+ * Main function: Fetch external tracking details for a single tracking number.
  */
 export async function fetchExternalTracking(
     trackingNumber: string,
@@ -214,43 +252,21 @@ export async function fetchExternalTracking(
         // First register the tracking number
         await register17Track([trackingNumber], apiKey);
 
-        // Small delay to allow 17track to process
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Wait for 17track to process
+        await new Promise(resolve => setTimeout(resolve, 2000));
 
-        // Then fetch tracking info
+        // Fetch tracking info
         const trackData = await fetchFrom17TrackAPI([trackingNumber], apiKey);
 
         if (trackData.has(trackingNumber)) {
             const data = trackData.get(trackingNumber)!;
-
             result.source = '17track';
             result.status = normalize17TrackStatus(data.status);
-            result.statusLabel = getStatusLabel(result.status);
+            result.statusLabel = data.statusLabel;
+            result.events = data.events;
 
             if (data.deliveredAt) {
                 result.deliveredAt = data.deliveredAt;
-            }
-
-            // Map 17track events to our format
-            if (data.events && data.events.length > 0) {
-                result.events = data.events.map((event: any) => ({
-                    timestamp: event.time_iso || event.time_utc || '',
-                    status: event.status?.toString() || '',
-                    description: event.description || event.details || '',
-                    location: event.location || '',
-                }));
-            }
-
-            // If we have a last event, also use it
-            if (data.lastEvent) {
-                if (!result.events.length) {
-                    result.events.push({
-                        timestamp: data.lastEvent.time_iso || data.lastEvent.time_utc || '',
-                        status: data.lastEvent.status?.toString() || '',
-                        description: data.lastEvent.description || data.lastEvent.details || '',
-                        location: data.lastEvent.location || '',
-                    });
-                }
             }
 
             return result;
@@ -259,7 +275,7 @@ export async function fetchExternalTracking(
         console.log('[TrackingFetcher] No TRACKING_API_KEY configured. Set TRACKING_API_KEY in .env for 17track API data.');
     }
 
-    // No external data available — provide detection-only results with tracking links
+    // No external data available — return detection-only results with tracking links
     result.status = 'pending';
     result.statusLabel = 'Track via links below';
     result.source = 'detection_only';
@@ -293,7 +309,7 @@ export async function fetchExternalTrackingBatch(
         }
     }
 
-    // Handle native carriers (just detection)
+    // Handle native carriers (just carrier detection, no API call)
     for (const tn of nativeNums) {
         const carrierInfo = detectCarrier(tn.number);
         results.set(tn.number, {
@@ -310,12 +326,15 @@ export async function fetchExternalTrackingBatch(
         });
     }
 
-    // Handle external carriers
+    // Handle external carriers with 17track API
     if (externalNums.length > 0 && apiKey) {
-        // Register all external numbers
         const nums = externalNums.map(t => t.number);
+
+        // Register all external numbers first
         await register17Track(nums, apiKey);
-        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // Wait for 17track to process registrations
+        await new Promise(resolve => setTimeout(resolve, 3000));
 
         // Fetch in batches of 40 (17track limit)
         const BATCH_SIZE = 40;
@@ -344,19 +363,11 @@ export async function fetchExternalTrackingBatch(
                     const data = trackData.get(tn.number)!;
                     result.source = '17track';
                     result.status = normalize17TrackStatus(data.status);
-                    result.statusLabel = getStatusLabel(result.status);
+                    result.statusLabel = data.statusLabel;
+                    result.events = data.events;
 
                     if (data.deliveredAt) {
                         result.deliveredAt = data.deliveredAt;
-                    }
-
-                    if (data.events?.length > 0) {
-                        result.events = data.events.map((event: any) => ({
-                            timestamp: event.time_iso || event.time_utc || '',
-                            status: event.status?.toString() || '',
-                            description: event.description || event.details || '',
-                            location: event.location || '',
-                        }));
                     }
                 }
 
@@ -364,7 +375,7 @@ export async function fetchExternalTrackingBatch(
             }
         }
     } else {
-        // No API key — just use detection
+        // No API key — just use carrier detection with tracking links
         for (const tn of externalNums) {
             const carrierInfo = detectCarrier(tn.number);
             results.set(tn.number, {

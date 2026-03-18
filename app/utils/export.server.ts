@@ -272,41 +272,49 @@ function buildEnhancedTrackingInfo(order: Order, externalData: Map<string, Exter
             if (tracking.number && externalData.has(tracking.number)) {
                 const ext = externalData.get(tracking.number)!;
 
-                // Supplement delivery status if Shopify is not providing it
-                if (!deliveredAt && ext.status === 'delivered') {
-                    deliveredAt = 'Delivered (via external tracking)';
+                // Supplement delivery date — use actual timestamp from 17track
+                if (!deliveredAt && ext.deliveredAt) {
+                    deliveredAt = formatDate(ext.deliveredAt);
+                } else if (!deliveredAt && ext.status === 'delivered' && ext.events.length > 0) {
+                    // If deliveredAt not set but status is delivered, use latest event
+                    deliveredAt = formatDate(ext.events[0].timestamp);
                 }
 
                 if (!estimatedDelivery && ext.estimatedDelivery) {
                     estimatedDelivery = ext.estimatedDelivery;
                 }
 
-                // Build tracking info text from external sources
-                if (!latestTrackingInfo) {
+                // Build tracking info text from external data
+                if (!latestTrackingInfo && ext.source === '17track') {
                     const infoParts: string[] = [];
-                    infoParts.push(`Status: ${ext.statusLabel}`);
-                    infoParts.push(`Carrier: ${ext.carrier}`);
-                    infoParts.push(`Source: ${ext.source}`);
 
+                    // Status first
+                    infoParts.push(ext.statusLabel);
+
+                    // Latest event details
                     if (ext.events.length > 0) {
                         const lastEvent = ext.events[0];
-                        infoParts.push(`Latest: ${lastEvent.description}`);
-                        if (lastEvent.location) {
-                            infoParts.push(`Location: ${lastEvent.location}`);
+                        if (lastEvent.description) {
+                            infoParts.push(lastEvent.description);
                         }
-                        infoParts.push(`Time: ${formatDate(lastEvent.timestamp)}`);
-                    }
-
-                    // Add tracking links for manual lookup
-                    const universalUrls = ext.universalTrackingUrls;
-                    if (universalUrls.length > 0) {
-                        infoParts.push(`Track: ${universalUrls.map(u => u.url).join(' | ')}`);
+                        if (lastEvent.location) {
+                            infoParts.push(lastEvent.location);
+                        }
+                        if (lastEvent.timestamp) {
+                            infoParts.push(formatDate(lastEvent.timestamp));
+                        }
                     }
 
                     latestTrackingInfo = infoParts.join(' | ');
+                } else if (!latestTrackingInfo) {
+                    // No 17track data — provide tracking links for manual lookup
+                    const urls = ext.universalTrackingUrls;
+                    if (urls.length > 0) {
+                        latestTrackingInfo = urls.map(u => `${u.name}: ${u.url}`).join(' | ');
+                    }
                 }
 
-                // Update delivery status from external if Shopify is generic
+                // Update delivery status from external if Shopify has none
                 if (deliveryStatus === 'Unfulfilled' || deliveryStatus === 'FULFILLED') {
                     deliveryStatus = ext.statusLabel;
                 }
