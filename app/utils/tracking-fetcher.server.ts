@@ -293,95 +293,82 @@ async function tryGetTrackInfo(
 /**
  * Step 2: Register new tracking numbers (consumes quota).
  * Only called for numbers not yet registered.
- * Tries to be smart about quota — checks remaining before bulk registration.
+ * Checks remaining quota before registration to avoid waste.
+ *
+ * IMPORTANT: Registration is fast but 17track needs a few seconds
+ * to process the data. We do a quick retry after 3 seconds.
+ * If data isn't ready yet, it'll be available on the next export.
  */
-async function registerNumbers(
+async function registerAndFetch(
     trackingNumbers: string[],
     apiKey: string
-): Promise<{ registered: number; quotaRemain: number }> {
-    if (trackingNumbers.length === 0) return { registered: 0, quotaRemain: -1 };
+): Promise<{ data: Map<string, Parsed17TrackData>; quotaRemain: number; registeredCount: number }> {
+    const data = new Map<string, Parsed17TrackData>();
+    if (trackingNumbers.length === 0) return { data, quotaRemain: -1, registeredCount: 0 };
 
-    // Check quota first before burning it
+    // Check quota first
     let quotaRemain = -1;
     try {
         const quotaRes = await fetch('https://api.17track.net/track/v2.2/getquota', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', '17token': apiKey },
             body: '{}',
-            signal: AbortSignal.timeout(5000),
+            signal: AbortSignal.timeout(3000),
         });
         const quotaData = await quotaRes.json();
         quotaRemain = quotaData?.data?.quota_remain ?? -1;
-        console.log(`[TrackingFetcher] Quota remaining before registration: ${quotaRemain}`);
+        console.log(`[TrackingFetcher] Quota remaining: ${quotaRemain}`);
 
         if (quotaRemain === 0) {
-            console.log(`[TrackingFetcher] ⚠️ Quota exhausted! Skipping registration of ${trackingNumbers.length} numbers. They'll get tracking links instead.`);
-            return { registered: 0, quotaRemain: 0 };
+            console.log(`[TrackingFetcher] ⚠️ Quota exhausted! Skipping registration.`);
+            return { data, quotaRemain: 0, registeredCount: 0 };
         }
 
         // Only register up to the remaining quota
         if (quotaRemain > 0 && trackingNumbers.length > quotaRemain) {
-            console.log(`[TrackingFetcher] Only registering ${quotaRemain} of ${trackingNumbers.length} (quota limit)`);
             trackingNumbers = trackingNumbers.slice(0, quotaRemain);
         }
-    } catch { /* ignore quota check errors, proceed with registration */ }
+    } catch { /* proceed with registration */ }
 
+    // Register
+    let registeredCount = 0;
     try {
         const body = trackingNumbers.map(num => ({ number: num, carrier: 0 }));
         const response = await fetch('https://api.17track.net/track/v2.2/register', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', '17token': apiKey },
             body: JSON.stringify(body),
-            signal: AbortSignal.timeout(15000),
+            signal: AbortSignal.timeout(8000),
         });
 
-        if (!response.ok) {
-            console.log(`[TrackingFetcher] register HTTP ${response.status}`);
-            return { registered: 0, quotaRemain };
+        if (response.ok) {
+            const result = await response.json();
+            registeredCount = result?.data?.accepted?.length || 0;
+            const alreadyRegistered = result?.data?.rejected?.length || 0;
+            console.log(`[TrackingFetcher] Registered ${registeredCount} new, ${alreadyRegistered} already existed`);
         }
-
-        const result = await response.json();
-        const accepted = result?.data?.accepted?.length || 0;
-        const rejected = result?.data?.rejected?.length || 0;
-
-        console.log(`[TrackingFetcher] Registered ${accepted} new numbers (${rejected} already existed). Quota used: ${accepted}`);
-
-        // Re-check remaining quota
-        try {
-            const quotaRes2 = await fetch('https://api.17track.net/track/v2.2/getquota', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', '17token': apiKey },
-                body: '{}',
-                signal: AbortSignal.timeout(5000),
-            });
-            const quotaData2 = await quotaRes2.json();
-            quotaRemain = quotaData2?.data?.quota_remain ?? -1;
-            console.log(`[TrackingFetcher] Quota remaining after registration: ${quotaRemain}`);
-        } catch { /* ignore */ }
-
-        return { registered: accepted, quotaRemain };
     } catch (error: any) {
         console.log(`[TrackingFetcher] register failed: ${error.message}`);
-        return { registered: 0, quotaRemain };
     }
-}
 
-/**
- * Step 3: Fetch tracking info for newly registered numbers.
- * Called after register + delay.
- */
-async function fetchNewlyRegistered(
-    trackingNumbers: string[],
-    apiKey: string
-): Promise<Map<string, Parsed17TrackData>> {
-    if (trackingNumbers.length === 0) return new Map();
+    if (registeredCount === 0) {
+        return { data, quotaRemain, registeredCount: 0 };
+    }
 
-    // 17track needs time to process newly registered numbers
-    // 8 seconds gives enough time for most carriers
-    await new Promise(resolve => setTimeout(resolve, 8000));
+    // Quick retry after 3 seconds — if data isn't ready, it'll be on next export
+    await new Promise(resolve => setTimeout(resolve, 3000));
 
-    const { data } = await tryGetTrackInfo(trackingNumbers, apiKey);
-    return data;
+    try {
+        const result = await tryGetTrackInfo(trackingNumbers, apiKey);
+        for (const [num, trackData] of result.data) {
+            data.set(num, trackData);
+        }
+        console.log(`[TrackingFetcher] Got data for ${data.size}/${trackingNumbers.length} after registration`);
+    } catch (error: any) {
+        console.log(`[TrackingFetcher] Post-registration fetch failed: ${error.message}`);
+    }
+
+    return { data, quotaRemain, registeredCount };
 }
 
 // =====================================================================
@@ -453,8 +440,7 @@ export async function fetchExternalTracking(
 
         // Register if needed (uses quota) and retry
         if (unregistered.includes(trackingNumber)) {
-            await registerNumbers([trackingNumber], apiKey);
-            const newData = await fetchNewlyRegistered([trackingNumber], apiKey);
+            const { data: newData } = await registerAndFetch([trackingNumber], apiKey);
             if (newData.has(trackingNumber)) {
                 const result = buildResult(trackingNumber, shopifyCarrierName, shopifyTrackingUrl, '17track', newData.get(trackingNumber));
                 setCachedResult(trackingNumber, result);
@@ -551,32 +537,31 @@ export async function fetchExternalTrackingBatch(
         allUnregistered.push(...unregistered);
     }
 
-    // Step 2: Register unregistered numbers (uses quota — checks quota first)
+    // Step 2: Register unregistered numbers and try to fetch immediately
     if (allUnregistered.length > 0) {
         console.log(`[TrackingFetcher] ${allUnregistered.length} numbers need registration...`);
-        const { registered, quotaRemain } = await registerNumbers(allUnregistered, apiKey);
+        const { data: newData, quotaRemain, registeredCount } = await registerAndFetch(allUnregistered, apiKey);
 
-        if (registered > 0) {
-            // Step 3: Fetch newly registered numbers
-            const newlyRegisteredData = await fetchNewlyRegistered(allUnregistered.slice(0, registered), apiKey);
-
-            for (const [num, trackData] of newlyRegisteredData) {
-                const info = infoMap.get(num);
-                const result = buildResult(num, info?.carrier, info?.url, '17track', trackData);
-                results.set(num, result);
-                setCachedResult(num, result);
-            }
+        for (const [num, trackData] of newData) {
+            const info = infoMap.get(num);
+            const result = buildResult(num, info?.carrier, info?.url, '17track', trackData);
+            results.set(num, result);
+            setCachedResult(num, result);
         }
 
-        // For any that still don't have data, add detection-only with links
+        // For any that still don't have data, add helpful status
         for (const num of allUnregistered) {
             if (!results.has(num)) {
                 const info = infoMap.get(num);
                 const result = buildResult(num, info?.carrier, info?.url, 'detection_only');
                 result.status = 'pending';
-                result.statusLabel = quotaRemain === 0
-                    ? 'Quota exhausted — track via links below'
-                    : 'Recently registered — data available on next export';
+                if (quotaRemain === 0) {
+                    result.statusLabel = 'Quota exhausted — track via links below';
+                } else if (registeredCount > 0) {
+                    result.statusLabel = 'Registered — export again in 1 min for full data';
+                } else {
+                    result.statusLabel = 'Track via links below';
+                }
                 results.set(num, result);
             }
         }
